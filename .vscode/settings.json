@@ -1,0 +1,7 @@
+{
+  "files.exclude": {
+    "backend/**/__pycache__": true,
+    "backend/.pytest_cache": true,
+    "backend/.ruff_cache": true
+  }
+}

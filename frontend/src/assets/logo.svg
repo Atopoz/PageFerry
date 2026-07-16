@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <title>PageFerry</title>
+  <!-- Derived from JOTO-Translation frontend/public/logo.svg at commit 9b9ee8b4aef62f5ddb78c48fcd0dcfdc6ee2153c. -->
+  <defs>
+    <linearGradient
+      id="ribbon-a"
+      x1="500"
+      x2="0"
+      y1="93"
+      y2="95"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#6e9cab" />
+      <stop offset="1" stop-color="#315f75" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-b"
+      x1="0"
+      x2="470"
+      y1="260"
+      y2="430"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#355f78" />
+      <stop offset="1" stop-color="#4c8e99" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-c"
+      x1="525"
+      x2="0"
+      y1="400"
+      y2="400"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#4b9c99" />
+      <stop offset="1" stop-color="#285b70" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-d"
+      x1="660"
+      x2="250"
+      y1="650"
+      y2="240"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#346f87" />
+      <stop offset="1" stop-color="#65b7ae" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-e"
+      x1="360"
+      x2="770"
+      y1="170"
+      y2="520"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#3d8993" />
+      <stop offset="1" stop-color="#7acfc0" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-f"
+      x1="270"
+      x2="620"
+      y1="720"
+      y2="420"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#2d6077" />
+      <stop offset="1" stop-color="#4ea497" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-g"
+      x1="500"
+      x2="810"
+      y1="0"
+      y2="390"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#466e86" />
+      <stop offset="1" stop-color="#65b3ae" />
+    </linearGradient>
+    <linearGradient
+      id="ribbon-h"
+      x1="0"
+      x2="380"
+      y1="760"
+      y2="760"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#284f68" />
+      <stop offset="1" stop-color="#34888a" />
+    </linearGradient>
+    <path
+      id="shape-b"
+      d="M100.729 231.72h59.24q4.167-.591 12.347 4.713t15.42 13.927q46.762 78.372 78.985 105.769c16.575 14.092 37.023 31.527 65.47 50.926q8.421 5.744 28.89 17.239 17.865 10.04 30.62 10.981c12.753.942 28.229.386 37.613-4.992l-37.575 40.542c-20.465 22.082-53.155 27.781-79.885 13.928q-25.881-13.414-75.437-56.677-54.517-49.743-87.469-99.946-32.95-50.205-48.22-96.41"
+    />
+    <path
+      id="shape-c"
+      d="M523.547 0h-41.5c-11.123 0-69.61 12.741-102.995 46.858q-33.385 34.116-52.65 94.377l-16.943 51.5q-27.16 80.82-90.415 149.795T57.404 442.985Q33.028 453.604 20.36 471.55t-16.888 33.19Q0 513.279 0 520.869v246.575l67.122-71.317V535.45q.653-9.95 6.134-16.56t14.613-8.566q25.275-7.4 51.299-18.574c26.023-11.173 105.414-62.774 148.27-115.01 42.854-52.235 70.586-104.774 80.07-129.495q9.485-24.722 24.95-72.692 27.35-94.335 61.917-127.695T523.547 0"
+    />
+    <path
+      id="shape-e"
+      d="M773.753 767.444Q600.674 336.317 588.01 312.192c-12.665-24.124-37.343-52.686-63.057-61.038a57.02 57.02 0 0 0-59.4 15.432l-42.348 45.606q24.948-10.584 43.38-5.292 18.434 5.292 35.342 26.216 11.469 12.507 23.026 39.305t85.12 208.511H502.263l-37.435 77.291h175.976l21.93 54.468q7.766 20.708 21.284 33.673c13.519 12.965 25.694 17.591 39.594 21.08q13.9 3.49 50.142 0"
+    />
+    <path
+      id="shape-f"
+      d="M445.518 698.187q-15.65 31.03-35.568 46.319-19.92 15.289-52.08 22.938H265.81q50.29-15.71 73.04-42.724 22.748-27.014 33.033-56.168l55.204-109.777L440.225 532l85.865-.003q-30.35 62.169-80.572 166.191"
+    />
+  </defs>
+
+  <rect x="8" y="8" width="1008" height="1008" rx="224" fill="#ffffff" />
+  <rect
+    x="12"
+    y="12"
+    width="1000"
+    height="1000"
+    rx="220"
+    fill="none"
+    stroke="#163b5c"
+    stroke-width="10"
+  />
+
+  <g
+    transform="translate(98 94)"
+    fill-rule="evenodd"
+    stroke="#123b5d"
+    stroke-linejoin="round"
+    stroke-width="14"
+  >
+    <path
+      fill="url(#ribbon-a)"
+      d="M278.776 0h-29.219q-14.735 1.145-28.715 14.189T205.956 43.12v57.918H57.868q-27.043 3.532-40.419 20.97Q4.074 139.448.919 156.027v18.526h439.634q32.14-4.674 45.2-22.49 13.059-17.815 14.859-38.137V101.04H278.776z"
+      opacity=".96"
+      transform="translate(30.94 30.248)"
+    />
+    <path
+      fill="#426f86"
+      d="M597.581 312.102 442.573 479.546c-30.004 32.41-77.717 41.3-117.38 21.868l-12.832-6.287 154.894-167.144c29.408-31.733 75.889-40.956 115.185-22.856z"
+    />
+    <use
+      href="#shape-b"
+      fill="url(#ribbon-b)"
+      transform="translate(30.94 30.248)"
+    />
+    <use
+      href="#shape-c"
+      fill="url(#ribbon-c)"
+      transform="translate(30.94 30.248)"
+    />
+    <path
+      fill="url(#ribbon-d)"
+      d="M705.217 240.697q12.232 32.743 11.424 53.866c-.32 8.387-1.126 28.345-9.467 46.49q-5.685 12.368-30.32 44.651-38.56 16.527-54.479 24.725c-22.222 11.445-43.363 15.658-55.304 38.783q-20.736 40.162-121.553 248.975-15.65 31.03-35.568 46.319-19.92 15.289-52.08 22.938H265.81q50.29-15.71 73.04-42.724 22.748-27.014 33.033-56.168l55.204-109.777 67.22-136.994q31.289-46.035 62.92-63.751 31.63-17.718 70.861-32.027 30.6-13.98 48.855-30.328c6.777-6.068 14.774-15.086 19.848-25.76q4.04-8.496 8.425-29.218"
+      transform="translate(30.94 30.248)"
+    />
+    <use
+      href="#shape-e"
+      fill="url(#ribbon-e)"
+      transform="translate(30.94 30.248)"
+    />
+    <use
+      href="#shape-f"
+      fill="url(#ribbon-f)"
+      transform="translate(30.94 30.248)"
+    />
+    <path
+      fill="url(#ribbon-g)"
+      d="M523.547 0h248.347v232.667q-.154 46.496-14.044 74.09-13.89 27.596-50.648 60.657l-30.348 18.29q34.683-45.21 37.539-78.946 2.855-33.735-9.176-66.06V65h-200.89q-22.265-.344-39.08 9.297-16.812 9.64-53.682 43.737 23.437-57.1 46.41-79.552Q480.95 16.03 523.548 0"
+      transform="translate(30.94 30.248)"
+    />
+    <path
+      fill="url(#ribbon-h)"
+      d="m0 767.444 67.122-71.317 252.944 3.544q16.91-1.037 29.266-10.097t22.552-21.022Q358.768 704.064 336 728.09c-22.77 24.026-42.943 33.184-70.189 39.355z"
+      transform="translate(30.94 30.248)"
+    />
+  </g>
+</svg>

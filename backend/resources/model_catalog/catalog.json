@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "catalog_version": "0.1.0-dev",
+  "released_at": null,
+  "providers": [
+    {
+      "id": "openai",
+      "display_name": "OpenAI",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "gemini",
+      "display_name": "Google Gemini",
+      "protocol": "gemini",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "deepseek",
+      "display_name": "DeepSeek",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "siliconflow",
+      "display_name": "SiliconFlow",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "glm",
+      "display_name": "Zhipu GLM",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "minimax",
+      "display_name": "MiniMax",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "qwen_dashscope",
+      "display_name": "Qwen / DashScope",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": false
+    },
+    {
+      "id": "custom_openai",
+      "display_name": "OpenAI-compatible",
+      "protocol": "custom",
+      "credential_type": "api_key",
+      "default_base_url": null,
+      "base_url_editable": true
+    }
+  ],
+  "models": [],
+  "provider_models": []
+}
