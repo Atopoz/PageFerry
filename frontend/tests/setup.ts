@@ -19,4 +19,8 @@ if (!HTMLElement.prototype.scrollIntoView) {
 import { cleanup } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+  document.documentElement.lang = '';
+});

@@ -11,6 +11,8 @@ import {
 } from 'lucide-react';
 
 import { DocumentTypeIcon } from '@/features/documents/DocumentTypeIcon';
+import { useI18n, type Translate, type UiLocale } from '@/i18n/i18n';
+import { translationLanguageLabel } from '@/i18n/translation-languages';
 import type { ModelCatalog, TranslationJob } from '@/lib/api';
 
 interface JobListProps {
@@ -22,9 +24,9 @@ interface JobListProps {
 }
 
 const jobStages = [
-  { id: 'extracting', label: '提取内容' },
-  { id: 'translating', label: '翻译文本' },
-  { id: 'formatting', label: '生成文档' },
+  { id: 'extracting', messageKey: 'jobs.stage.extracting' },
+  { id: 'translating', messageKey: 'jobs.stage.translating' },
+  { id: 'formatting', messageKey: 'jobs.stage.formatting' },
 ] as const;
 
 /** 从 bundled catalog 找出模型显示名，未加载时保留稳定 id。 */
@@ -39,25 +41,26 @@ function modelDisplayName(
 }
 
 /** 将持久化 error code 映射成不暴露内部细节的短文案。 */
-function jobErrorLabel(errorCode: string): string {
-  const labels: Record<string, string> = {
-    process_interrupted: '应用上次意外退出',
-    source_unavailable: '源文件不可读取',
-    pipeline_failed: '文档处理失败',
-    provider_key: '模型密钥不可用',
-    provider_endpoint: '模型 endpoint 不可用',
-    provider_model: '模型不可用',
-    provider_rate_limit: '请求过于频繁',
-    provider_network: '模型网络异常',
-    provider_protocol: '模型响应异常',
+function jobErrorLabel(errorCode: string, t: Translate): string {
+  const labels: Record<string, Parameters<Translate>[0]> = {
+    process_interrupted: 'jobs.error.processInterrupted',
+    source_unavailable: 'jobs.error.sourceUnavailable',
+    pipeline_failed: 'jobs.error.pipelineFailed',
+    provider_key: 'jobs.error.providerKey',
+    provider_endpoint: 'jobs.error.providerEndpoint',
+    provider_model: 'jobs.error.providerModel',
+    provider_rate_limit: 'jobs.error.providerRateLimit',
+    provider_network: 'jobs.error.providerNetwork',
+    provider_protocol: 'jobs.error.providerProtocol',
   };
-  return labels[errorCode] ?? '任务未完成';
+  const key = labels[errorCode];
+  return key ? t(key) : t('jobs.error.incomplete');
 }
 
 /** 返回运行中任务的当前阶段标签，翻译阶段附带真实片段计数。 */
-function runningLabel(job: TranslationJob): string {
+function runningLabel(job: TranslationJob, t: Translate): string {
   const stage = jobStages.find((item) => item.id === job.progress_stage);
-  const label = stage?.label ?? '处理中';
+  const label = stage ? t(stage.messageKey) : t('jobs.stage.processing');
   if (job.progress_stage === 'translating' && job.total_segments > 0) {
     return `${label} ${job.processed_segments} / ${job.total_segments}`;
   }
@@ -65,58 +68,46 @@ function runningLabel(job: TranslationJob): string {
 }
 
 /** 将任务状态压缩成状态 pill 中可扫读的一句话。 */
-function jobStatusLabel(job: TranslationJob): string {
-  if (job.status === 'running') return runningLabel(job);
+function jobStatusLabel(job: TranslationJob, t: Translate): string {
+  if (job.status === 'running') return runningLabel(job, t);
   if (job.status === 'succeeded' && job.fallback_segments > 0) {
-    return `完成 · ${job.fallback_segments} 处回退`;
+    return t('jobs.status.fallback', { count: job.fallback_segments });
   }
   if (job.status === 'failed' && job.error_code) {
-    return `失败 · ${jobErrorLabel(job.error_code)}`;
+    return t('jobs.status.failed', {
+      reason: jobErrorLabel(job.error_code, t),
+    });
   }
-  return {
-    queued: '等待中',
-    succeeded: '已完成',
-    failed: '失败',
-    cancelled: '已取消',
-  }[job.status];
+  const keys = {
+    queued: 'jobs.status.queued',
+    succeeded: 'jobs.status.succeeded',
+    failed: 'jobs.status.failedBare',
+    cancelled: 'jobs.status.cancelled',
+  } as const;
+  return t(keys[job.status]);
 }
 
 /** 为屏幕阅读器生成运行中任务的进度摘要，与 pill 可见文案互补。 */
-function runningAriaLabel(job: TranslationJob): string {
+function runningAriaLabel(job: TranslationJob, t: Translate): string {
   if (job.progress_stage === 'translating' && job.total_segments > 0) {
-    return `任务进度：翻译文本，已处理 ${job.processed_segments} / ${job.total_segments} 个片段`;
+    return t('jobs.progress.segments', {
+      processed: job.processed_segments,
+      total: job.total_segments,
+    });
   }
-  return `任务进度：${runningLabel(job)}`;
+  return t('jobs.progress.stage', { stage: runningLabel(job, t) });
 }
 
 /** 把 ISO 时间格式化为历史列表中的紧凑本地时间。 */
-function formatJobTime(value: string): string {
+function formatJobTime(value: string, locale: UiLocale): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     month: 'numeric',
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
   }).format(date);
-}
-
-/** 将 job 中的语言代码转换为历史页中的短标签。 */
-function languageLabel(value: string | null): string {
-  const labels: Record<string, string> = {
-    'zh-CN': '简体中文',
-    'zh-TW': '繁體中文（台湾）',
-    'zh-HK': '繁體中文（香港）',
-    en: 'English',
-    ja: '日本語',
-    ko: '한국어',
-    fr: 'Français',
-    de: 'Deutsch',
-    es: 'Español',
-    ru: 'Русский',
-  };
-  if (value === null || value === 'auto') return '自动识别';
-  return labels[value] ?? value;
 }
 
 /** 判断 renderer 是否运行在 Tauri IPC 环境。 */
@@ -125,9 +116,12 @@ function isTauriRuntime(): boolean {
 }
 
 /** 请求 Rust 校验输出路径，再调用系统默认应用打开文件。 */
-async function openOutput(path: string): Promise<void> {
+async function openOutput(
+  path: string,
+  desktopOnlyMessage: string,
+): Promise<void> {
   if (!isTauriRuntime()) {
-    throw new Error('请在 PageFerry 桌面版中打开输出文件。');
+    throw new Error(desktopOnlyMessage);
   }
   const { invoke } = await import('@tauri-apps/api/core');
   await invoke('open_output', { path });
@@ -141,12 +135,14 @@ export function JobList({
   showCreatedAt = false,
   onError,
 }: JobListProps) {
+  const { locale, t } = useI18n();
+
   /** 打开一个已完成任务，并把原生 opener 失败交给所属页面展示。 */
   async function openJobOutput(path: string) {
     try {
-      await openOutput(path);
+      await openOutput(path, t('jobs.desktopOnly'));
     } catch (error) {
-      onError(error instanceof Error ? error.message : '无法打开输出文件。');
+      onError(error instanceof Error ? error.message : t('jobs.openFailed'));
     }
   }
 
@@ -175,9 +171,9 @@ export function JobList({
                 <b>{modelDisplayName(catalog, job.model_id)}</b>
                 {showCreatedAt ? (
                   <i>
-                    {languageLabel(job.source_language)} →{' '}
-                    {languageLabel(job.target_language)} ·{' '}
-                    {formatJobTime(job.created_at)}
+                    {translationLanguageLabel(job.source_language, t)} →{' '}
+                    {translationLanguageLabel(job.target_language, t)} ·{' '}
+                    {formatJobTime(job.created_at, locale)}
                   </i>
                 ) : null}
               </span>
@@ -187,7 +183,7 @@ export function JobList({
               className={`job-state job-state--${job.status}`}
               key={`${job.status}:${job.progress_stage}`}
               aria-label={
-                job.status === 'running' ? runningAriaLabel(job) : undefined
+                job.status === 'running' ? runningAriaLabel(job, t) : undefined
               }
             >
               {job.status === 'running' ? (
@@ -201,7 +197,7 @@ export function JobList({
               ) : (
                 <AlertCircle aria-hidden="true" size={14} />
               )}
-              <span>{jobStatusLabel(job)}</span>
+              <span>{jobStatusLabel(job, t)}</span>
             </div>
 
             {outputPath ? (
@@ -211,13 +207,13 @@ export function JobList({
                 onClick={() => void openJobOutput(outputPath)}
               >
                 <FolderOpen aria-hidden="true" size={15} />
-                打开文件
+                {t('jobs.openFile')}
               </button>
             ) : (
               <button
                 className="icon-button"
                 type="button"
-                aria-label="任务菜单"
+                aria-label={t('jobs.menu')}
                 disabled
               >
                 <MoreHorizontal aria-hidden="true" size={18} />

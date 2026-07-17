@@ -23,6 +23,9 @@ import {
 } from '@/features/documents/DocumentTypeIcon';
 import { JobList } from '@/features/jobs/JobList';
 import { ProviderIcon } from '@/features/providers/ProviderIcon';
+import { useI18n, type Translate } from '@/i18n/i18n';
+import { translationLanguageOptions } from '@/i18n/translation-languages';
+import { ApiError } from '@/lib/api';
 import type {
   DocumentTranslationOptions,
   ModelCatalog,
@@ -85,24 +88,6 @@ const supportedExtensions = new Set<SupportedDocumentKind>([
   'md',
 ]);
 
-const languageOptions: readonly CompactSelectOption[] = [
-  { value: 'zh-CN', label: '简体中文' },
-  { value: 'zh-TW', label: '繁體中文（台湾）' },
-  { value: 'zh-HK', label: '繁體中文（香港）' },
-  { value: 'en', label: 'English' },
-  { value: 'ja', label: '日本語' },
-  { value: 'ko', label: '한국어' },
-  { value: 'fr', label: 'Français' },
-  { value: 'de', label: 'Deutsch' },
-  { value: 'es', label: 'Español' },
-  { value: 'ru', label: 'Русский' },
-];
-
-const sourceLanguageOptions: readonly CompactSelectOption[] = [
-  { value: 'auto', label: '自动识别' },
-  ...languageOptions,
-];
-
 /** 返回文件名的小写扩展名。 */
 function extensionOf(fileName: string): string {
   return fileName.split('.').at(-1)?.toLowerCase() ?? '';
@@ -144,6 +129,30 @@ function defaultDocumentOptions(
     return { kind, translate_tables: true, translate_notes: true };
   }
   return null;
+}
+
+/** 把创建任务的稳定 error code 转成当前 UI locale 下的可操作提示。 */
+function translationRequestError(error: unknown, t: Translate): string {
+  if (!(error instanceof ApiError)) return t('translation.createFailed');
+  const errorKeys: Record<string, Parameters<Translate>[0]> = {
+    invalid_source: 'translation.error.invalidSource',
+    source_not_found: 'translation.error.sourceNotFound',
+    source_unavailable: 'translation.error.sourceUnavailable',
+    unsupported_format: 'translation.unsupportedFile',
+    empty_file: 'translation.error.emptyFile',
+    file_too_large: 'translation.error.fileTooLarge',
+    invalid_file_name: 'translation.error.invalidFileName',
+    invalid_document_options: 'translation.error.invalidOptions',
+    invalid_target_language: 'translation.error.invalidTargetLanguage',
+    provider_key: 'translation.error.providerKey',
+    provider_endpoint: 'translation.error.providerEndpoint',
+    provider_model: 'translation.error.providerModel',
+    provider_rate_limit: 'translation.error.providerRateLimit',
+    provider_network: 'translation.error.providerNetwork',
+    provider_protocol: 'translation.error.providerProtocol',
+  };
+  const key = error.code ? errorKeys[error.code] : undefined;
+  return key ? t(key) : t('translation.createFailed');
 }
 
 /** 把可运行的 provider/model 投影成顺序稳定的供应商分组。 */
@@ -217,6 +226,7 @@ interface AdvancedOptionsProps {
 
 /** 直接铺开当前 Office runtime 的文件选项，让用户无需猜测隐藏入口。 */
 function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
+  const { t } = useI18n();
   if (options === null) return null;
 
   return (
@@ -224,20 +234,22 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
       <header className="file-options-heading">
         <span>
           <Settings2 aria-hidden="true" size={13} />
-          <strong id="file-options-title">文件选项</strong>
+          <strong id="file-options-title">
+            {t('translation.fileOptions')}
+          </strong>
         </span>
         <small>{options.kind.toUpperCase()}</small>
       </header>
       <div className="file-options-controls">
         <label className="advanced-option-row">
           <span className="advanced-option-copy">
-            <strong>翻译表格</strong>
-            <small>同时翻译表格内的文字内容</small>
+            <strong>{t('translation.tables.title')}</strong>
+            <small>{t('translation.tables.description')}</small>
           </span>
           <Switch.Root
             className="option-switch"
             checked={options.translate_tables}
-            aria-label="翻译表格"
+            aria-label={t('translation.tables.title')}
             onCheckedChange={(checked) =>
               onChange({ ...options, translate_tables: checked })
             }
@@ -249,13 +261,13 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
         {options.kind === 'pptx' ? (
           <label className="advanced-option-row">
             <span className="advanced-option-copy">
-              <strong>翻译演讲者备注</strong>
-              <small>包含每页幻灯片下方的备注</small>
+              <strong>{t('translation.notes.title')}</strong>
+              <small>{t('translation.notes.description')}</small>
             </span>
             <Switch.Root
               className="option-switch"
               checked={options.translate_notes}
-              aria-label="翻译演讲者备注"
+              aria-label={t('translation.notes.title')}
               onCheckedChange={(checked) =>
                 onChange({ ...options, translate_notes: checked })
               }
@@ -278,6 +290,7 @@ export function TranslationWorkspace({
   onOpenModelSettings,
   onStart,
 }: TranslationWorkspaceProps) {
+  const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [document, setDocument] = useState<PendingDocument | null>(null);
   const [documentOptions, setDocumentOptions] =
@@ -288,6 +301,11 @@ export function TranslationWorkspace({
   const [isDragging, setIsDragging] = useState(false);
   const [isStarting, setIsStarting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const languageOptions = translationLanguageOptions(t);
+  const sourceLanguageOptions: readonly CompactSelectOption[] = [
+    { value: 'auto', label: t('language.auto') },
+    ...languageOptions,
+  ];
 
   useEffect(() => {
     if (!active || !isTauriRuntime()) return;
@@ -314,7 +332,7 @@ export function TranslationWorkspace({
             const name = nameFromPath(path);
             const kind = documentKindOf(name);
             if (kind === null) {
-              setNotice('仅支持 DOCX、PPTX、TXT 与 Markdown。');
+              setNotice(t('translation.unsupportedFile'));
               return;
             }
             setDocument({ source: 'path', path, name, kind });
@@ -326,7 +344,7 @@ export function TranslationWorkspace({
         else unlisten = nextUnlisten;
       } catch {
         if (!disposed) {
-          setNotice('原生拖放暂时不可用，请点击选择文件。');
+          setNotice(t('translation.nativeDropUnavailable'));
         }
       }
     }
@@ -336,7 +354,7 @@ export function TranslationWorkspace({
       disposed = true;
       unlisten?.();
     };
-  }, [active]);
+  }, [active, t]);
 
   const choiceGroups = modelChoiceGroups(catalog, providers);
   const choices = choiceGroups.flatMap((group) => group.choices);
@@ -365,7 +383,7 @@ export function TranslationWorkspace({
     if (file === undefined) return;
     const kind = documentKindOf(file.name);
     if (kind === null) {
-      setNotice('仅支持 DOCX、PPTX、TXT 与 Markdown。');
+      setNotice(t('translation.unsupportedFile'));
       return;
     }
     setDocument({ source: 'file', file, name: file.name, kind });
@@ -385,7 +403,7 @@ export function TranslationWorkspace({
       directory: false,
       filters: [
         {
-          name: 'PageFerry 文档',
+          name: t('translation.documentFilter'),
           extensions: ['docx', 'pptx', 'txt', 'md'],
         },
       ],
@@ -415,7 +433,7 @@ export function TranslationWorkspace({
       });
       setDocument(null);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : '任务创建失败。');
+      setNotice(translationRequestError(error, t));
     } finally {
       setIsStarting(false);
     }
@@ -449,17 +467,20 @@ export function TranslationWorkspace({
     >
       <header className="page-heading page-heading--compact">
         <div>
-          <h1 id="translation-title">文件翻译</h1>
-          <p>选择文件和目标语言，PageFerry 会保留原格式输出新文件</p>
+          <h1 id="translation-title">{t('translation.title')}</h1>
+          <p>{t('translation.description')}</p>
         </div>
       </header>
 
       <div className="translation-toolbar">
-        <div className="language-route" aria-label="翻译语言">
+        <div
+          className="language-route"
+          aria-label={t('translation.languageRoute')}
+        >
           <div className="toolbar-control">
-            <span>源语言</span>
+            <span>{t('translation.sourceLanguage')}</span>
             <CompactSelect
-              ariaLabel="源语言"
+              ariaLabel={t('translation.sourceLanguage')}
               value={sourceLanguage}
               options={sourceLanguageOptions}
               onValueChange={setSourceLanguage}
@@ -469,7 +490,7 @@ export function TranslationWorkspace({
           <button
             className="swap-language-button"
             type="button"
-            aria-label="交换源语言和目标语言"
+            aria-label={t('translation.swapLanguages')}
             disabled={sourceLanguage === 'auto'}
             onClick={swapLanguages}
           >
@@ -477,9 +498,9 @@ export function TranslationWorkspace({
           </button>
 
           <div className="toolbar-control">
-            <span>目标语言</span>
+            <span>{t('translation.targetLanguage')}</span>
             <CompactSelect
-              ariaLabel="目标语言"
+              ariaLabel={t('translation.targetLanguage')}
               value={targetLanguage}
               options={languageOptions}
               onValueChange={setTargetLanguage}
@@ -488,7 +509,7 @@ export function TranslationWorkspace({
         </div>
 
         <div className="toolbar-control model-toolbar-control">
-          <span>翻译模型</span>
+          <span>{t('translation.model')}</span>
           {selectedModel === undefined ? (
             <button
               className="model-required"
@@ -496,11 +517,11 @@ export function TranslationWorkspace({
               onClick={onOpenModelSettings}
             >
               <Settings2 aria-hidden="true" size={15} />
-              配置模型
+              {t('translation.configureModel')}
             </button>
           ) : (
             <CompactSelect
-              ariaLabel="翻译模型"
+              ariaLabel={t('translation.model')}
               className="model-select-trigger"
               value={selectedModel.key}
               groups={modelGroups}
@@ -550,8 +571,8 @@ export function TranslationWorkspace({
             <span className="dropzone-icon" aria-hidden="true">
               <CloudUpload size={29} strokeWidth={1.7} />
             </span>
-            <strong>拖放文件到这里</strong>
-            <span>或点击选择文件</span>
+            <strong>{t('translation.dropFile')}</strong>
+            <span>{t('translation.chooseFile')}</span>
             <small>DOCX · PPTX · TXT · MD</small>
           </button>
         </div>
@@ -566,14 +587,14 @@ export function TranslationWorkspace({
               <span>
                 {document.source === 'file'
                   ? formatBytes(document.file.size)
-                  : `本地文件 · ${document.kind.toUpperCase()}`}
+                  : `${t('translation.localFile')} · ${document.kind.toUpperCase()}`}
               </span>
             </div>
-            <span className="file-ready">准备就绪</span>
+            <span className="file-ready">{t('translation.ready')}</span>
             <button
               className="icon-button"
               type="button"
-              aria-label="移除文件"
+              aria-label={t('translation.removeFile')}
               onClick={removeDocument}
             >
               <X aria-hidden="true" size={17} />
@@ -597,7 +618,7 @@ export function TranslationWorkspace({
               ) : (
                 <Play aria-hidden="true" size={15} fill="currentColor" />
               )}
-              {isStarting ? '正在创建' : '开始翻译'}
+              {isStarting ? t('translation.creating') : t('translation.start')}
             </button>
           </footer>
         </div>
@@ -613,8 +634,8 @@ export function TranslationWorkspace({
       {jobs.length > 0 ? (
         <section className="session-jobs" aria-labelledby="session-jobs-title">
           <div className="section-line-heading">
-            <h2 id="session-jobs-title">本次任务</h2>
-            <span>{jobs.length} 个任务</span>
+            <h2 id="session-jobs-title">{t('translation.sessionJobs')}</h2>
+            <span>{t('translation.jobCount', { count: jobs.length })}</span>
           </div>
           <JobList jobs={jobs} catalog={catalog} onError={setNotice} />
         </section>

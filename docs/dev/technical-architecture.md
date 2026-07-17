@@ -67,11 +67,11 @@ docs/dev/                  # 当前计划与决策
 
 ### 桌面壳与前端信息架构
 
-macOS 主窗口保留系统原生装饰，使用 Tauri `Overlay` titlebar 隐藏窗口标题并保留原生 traffic lights。Windows 通过平台配置关闭 decorations，由 React 自绘最小化、最大化/还原和关闭 controls，并用 Windows 专用 capability 只开放这三个窗口命令。两端共用横跨窗口的 topbar 作为 drag region，sidebar 从 topbar 下方开始，不占用系统窗口按钮区域；Linux 保留原生 titlebar，不重复渲染应用 topbar。应用侧栏使用 compact 行高、克制的 active fill 与短标签，只承担三个独立页面的切换：文件翻译、历史记录、模型供应商。它不承载 provider 详情，也不在品牌区堆放大段说明。
+macOS 主窗口保留系统原生装饰，使用 Tauri `Overlay` titlebar 隐藏窗口标题并保留原生 traffic lights。Windows 通过平台配置关闭 decorations，由 React 自绘最小化、最大化/还原和关闭 controls，并用 Windows 专用 capability 只开放这三个窗口命令。两端共用横跨窗口的 topbar 作为 drag region，sidebar 从 topbar 下方开始，不占用系统窗口按钮区域；Linux 保留原生 titlebar，不重复渲染应用 topbar。应用侧栏使用 compact 行高、克制的 active fill 与短标签，主导航只承担三个独立工作页面的切换：文件翻译、历史记录、模型服务；模型服务与前两个任务页面之间用轻分割线区分工作流边界。应用级设置固定为侧栏最底部的独立入口，不混入模型服务页，也不在品牌区堆放大段说明。sidecar 正常连接时不常驻展示状态或版本；连接中与离线状态才临时显示在设置上方。
 
 #### 文件翻译页
 
-- 顶部只放紧凑的源语言、目标语言与已启用模型选择；model picker 不展示未配置、未启用或 probe 失败的模型。
+- 顶部只放紧凑的源语言、目标语言与已启用模型选择；model picker 不展示未配置、未启用或 probe 失败的模型。翻译语种 selector 的主名称跟随当前 UI locale，本族语名称只在展开列表中作为次级识别信息，选中后的 trigger 仍只显示主名称。
 - 选中文件后，上传区收敛为文件卡。文件卡下方直接铺开紧凑的「文件选项」，不再用 disclosure 隐藏入口；只渲染当前 `document_kind` 已真实支持的开关：DOCX 为翻译表格，PPTX 为翻译表格与 speaker notes，默认均开启；TXT、Markdown 当前没有选项时不展示空面板。
 - 文件类型变化或移除文件时重置为对应 module 默认值。创建任务时发送补齐默认值后的 options snapshot，任务开始后不再受 UI 默认值变化影响。
 - 页面任务区只显示当前 renderer session 创建的 job id。任务 polling 可以读取后端任务列表，但渲染前必须用 session id 集合过滤，不能把持久化历史填进文件翻译页。renderer 重启后的旧任务只在历史记录页出现。
@@ -80,9 +80,15 @@ macOS 主窗口保留系统原生装饰，使用 Tauri `Overlay` titlebar 隐藏
 
 历史记录页独占 `GET /api/v1/jobs` 返回的持久化任务列表，展示文件名、语言、provider/model、状态、时间与结果操作。options snapshot 由后端保存并随任务 contract 返回，供后续详情视图复现；列表不把全部选项摊开成说明文字。历史页也不复制上传区、语言选择或 provider 配置表单。
 
+#### 通用设置与 i18n
+
+设置页承载影响整个 renderer 的设备级偏好，首个设置为应用语言，并在独立「关于」区展示构建期应用版本。版本来自 renderer package metadata，不借用 sidecar 在线状态，因此服务离线时仍可确认当前客户端版本。首版完整支持简体中文与 English，并提供「跟随系统」；解析 `navigator.languages` 时按用户声明的优先顺序选择第一个受支持 locale，未匹配时 fallback 到 English。显式选择写入版本化 `localStorage` key，跟随系统不写冗余值；切换只更新 React context 与文档 `lang`，不得 remount 主窗口、清空翻译文件或 provider 草稿。
+
+`uiLocale` 与任务的 `source_language` / `target_language` 是两套独立 contract。翻译语种继续提交稳定 BCP 47 code；所有工作页、状态、校验提示和 ARIA 文案从同一应用级 message catalog 读取，历史页与翻译页不得各自维护另一份语言名称映射。
+
 #### 模型供应商页
 
-模型供应商页在主内容区使用二栏布局，不使用抽屉：左栏固定陈列 DeepSeek、Kimi、Zhipu GLM、MiniMax、Xiaomi MiMo 五个 preset，并把用户创建的 OpenAI-compatible provider 放入独立分组；右栏是当前 provider 的连接配置与 model inventory。preset 不再经过“先添加再配置”的中间状态，未配置项也始终可选。
+模型供应商页在主内容区使用二栏布局，不使用抽屉：左栏固定陈列 DeepSeek、Kimi、Zhipu GLM、MiniMax、Xiaomi MiMo 五个 preset，并把用户创建的 OpenAI-compatible provider 放入独立分组；右栏是当前 provider 的连接配置与 model inventory。侧栏不展示 active provider 数量，左栏标题也不复述供应商总数或启用数；状态直接由当前列表项表达。preset 不再经过“先添加再配置”的中间状态，未配置项也始终可选。
 
 右栏按连接与模型两个紧凑 section 排列：每个 provider 只有一个 API Key；字段旁的「检测」只对当前草稿做一次不落盘的最小 inference，底部「保存配置」才表达持久化意图，并在完整验证成功后原子写入 Keychain 与 metadata。首次保存成功默认进入 active，之后可用标题栏开关非破坏暂停；模型区以 bundled catalog 作为稳定 baseline，提供手动添加、「同步模型」、enabled 开关和唯一 default 选择。手动添加只登记 `source: "manual"` 的 disabled model，之后通过模型开关完成最小 inference 才能启用；首次配置前添加的 manual model 则随 `enable_all_models` 整组验证。同步对已配置且提供可靠 `models_path` 的 provider 开放，即使 provider 暂时 inactive 也使用已保存 Key 幂等增补 remote model 并更新 availability，不改 manual model 的 availability，也不改 enabled/default、probe 或 runtime settings。每个已启用 model 可以覆盖 catalog 支持的 reasoning policy，以及单 job 和应用级共享两层并发；省略 override 时使用应用默认的 6 与 15。
 

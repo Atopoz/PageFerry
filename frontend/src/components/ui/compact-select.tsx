@@ -37,6 +37,7 @@ function compactSelectItem(option: CompactSelectOption) {
       className="compact-select-item"
       key={option.value}
       value={option.value}
+      aria-label={option.label}
     >
       {option.icon ? (
         <span className="compact-select-item-icon" aria-hidden="true">

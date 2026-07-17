@@ -1,46 +1,50 @@
-/** 定义 PageFerry 三个一级页面的紧凑桌面侧边栏。 */
+/** 定义 PageFerry 工作页面与底部通用设置入口的紧凑桌面侧边栏。 */
 
 import {
-  Boxes,
   CircleDashed,
+  Cloud,
   FileText,
   History,
   PanelLeftClose,
   PanelLeftOpen,
+  Settings,
   WifiOff,
 } from 'lucide-react';
 import type { PointerEvent } from 'react';
 
-export type AppRoute = 'translate' | 'history' | 'providers';
+import { useI18n } from '@/i18n/i18n';
+
+export type AppRoute = 'translate' | 'history' | 'providers' | 'settings';
 export type ServiceState = 'checking' | 'connected' | 'offline';
 
 interface AppSidebarProps {
   activeRoute: AppRoute;
   collapsed: boolean;
-  activeProviderCount: number;
   serviceState: ServiceState;
-  serviceLabel: string;
   onNavigate: (route: AppRoute) => void;
   onToggleCollapsed: () => void;
 }
-
-const routeItems = [
-  { route: 'translate', label: '文件翻译', icon: FileText },
-  { route: 'history', label: '历史记录', icon: History },
-  { route: 'providers', label: '模型服务', icon: Boxes },
-] as const;
 
 /** 渲染一级页面导航；收起后仍保留 tooltip 与可访问名称。 */
 export function AppSidebar({
   activeRoute,
   collapsed,
-  activeProviderCount,
   serviceState,
-  serviceLabel,
   onNavigate,
   onToggleCollapsed,
 }: AppSidebarProps) {
+  const { t } = useI18n();
   const ServiceIcon = serviceState === 'offline' ? WifiOff : CircleDashed;
+  const routeGroups = [
+    [
+      { route: 'translate', label: t('sidebar.translate'), icon: FileText },
+      { route: 'history', label: t('sidebar.history'), icon: History },
+    ],
+    [{ route: 'providers', label: t('sidebar.providers'), icon: Cloud }],
+  ] as const;
+  const settingsLabel = t('sidebar.settings');
+  const serviceLabel =
+    serviceState === 'offline' ? t('service.offline') : t('service.connecting');
 
   /** 点击 wordmark 时回到文件翻译工作区。 */
   function openTranslationWorkspace() {
@@ -53,12 +57,12 @@ export function AppSidebar({
   }
 
   return (
-    <aside className="app-sidebar" aria-label="主要导航">
+    <aside className="app-sidebar" aria-label={t('sidebar.primaryNavigation')}>
       <div className="sidebar-brand-region">
         <button
           className="sidebar-wordmark-button"
           type="button"
-          aria-label="返回文件翻译"
+          aria-label={t('sidebar.backToTranslate')}
           hidden={collapsed}
           onClick={openTranslationWorkspace}
         >
@@ -79,7 +83,7 @@ export function AppSidebar({
         <button
           className="sidebar-toggle"
           type="button"
-          aria-label={collapsed ? '展开侧边栏' : '收起侧边栏'}
+          aria-label={collapsed ? t('sidebar.expand') : t('sidebar.collapse')}
           aria-expanded={!collapsed}
           onClick={onToggleCollapsed}
           onPointerUp={releasePointerFocus}
@@ -92,42 +96,64 @@ export function AppSidebar({
         </button>
       </div>
 
-      <nav className="sidebar-nav" aria-label="工作区">
-        {routeItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = item.route === activeRoute;
-          return (
-            <button
-              className={`sidebar-nav-item ${isActive ? 'sidebar-nav-item--active' : ''}`}
-              type="button"
-              key={item.route}
-              title={collapsed ? item.label : undefined}
-              aria-current={isActive ? 'page' : undefined}
-              onClick={() => onNavigate(item.route)}
-            >
-              <Icon aria-hidden="true" size={18} strokeWidth={1.8} />
-              <span>{item.label}</span>
-              {item.route === 'providers' && activeProviderCount > 0 ? (
-                <small className="sidebar-count">{activeProviderCount}</small>
-              ) : null}
-            </button>
-          );
-        })}
+      <nav className="sidebar-nav" aria-label={t('sidebar.workspace')}>
+        {routeGroups.map((group, groupIndex) => (
+          <div
+            className={`sidebar-nav-group ${groupIndex === 1 ? 'sidebar-nav-group--services' : ''}`}
+            key={group[0].route}
+          >
+            {group.map((item) => {
+              const Icon = item.icon;
+              const isActive = item.route === activeRoute;
+              return (
+                <button
+                  className={`sidebar-nav-item ${isActive ? 'sidebar-nav-item--active' : ''}`}
+                  type="button"
+                  key={item.route}
+                  title={collapsed ? item.label : undefined}
+                  aria-current={isActive ? 'page' : undefined}
+                  onClick={() => onNavigate(item.route)}
+                >
+                  <Icon aria-hidden="true" size={18} strokeWidth={1.8} />
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
-      <div
-        className={`sidebar-service sidebar-service--${serviceState}`}
-        title={collapsed ? serviceLabel : undefined}
-        role={serviceState === 'connected' ? undefined : 'status'}
-      >
-        {serviceState === 'connected' ? null : (
-          <ServiceIcon
-            className={serviceState === 'checking' ? 'spin' : ''}
-            aria-hidden="true"
-            size={14}
-          />
-        )}
-        <span>{serviceLabel}</span>
+      <div className="sidebar-footer">
+        {serviceState !== 'connected' ? (
+          <div
+            className={`sidebar-service sidebar-service--${serviceState}`}
+            title={collapsed ? serviceLabel : undefined}
+            role="status"
+          >
+            <ServiceIcon
+              className={serviceState === 'checking' ? 'spin' : ''}
+              aria-hidden="true"
+              size={14}
+            />
+            <span>{serviceLabel}</span>
+          </div>
+        ) : null}
+
+        <nav
+          className="sidebar-nav sidebar-nav--utility"
+          aria-label={settingsLabel}
+        >
+          <button
+            className={`sidebar-nav-item ${activeRoute === 'settings' ? 'sidebar-nav-item--active' : ''}`}
+            type="button"
+            title={collapsed ? settingsLabel : undefined}
+            aria-current={activeRoute === 'settings' ? 'page' : undefined}
+            onClick={() => onNavigate('settings')}
+          >
+            <Settings aria-hidden="true" size={18} strokeWidth={1.8} />
+            <span>{settingsLabel}</span>
+          </button>
+        </nav>
       </div>
     </aside>
   );

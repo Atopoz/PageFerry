@@ -1,4 +1,4 @@
-/** 组装 PageFerry 桌面壳、三个一级页面与本地任务轮询。 */
+/** 组装 PageFerry 桌面壳、工作页面、通用设置与本地任务轮询。 */
 
 import { AlertTriangle } from 'lucide-react';
 import { useEffect, useState } from 'react';
@@ -12,6 +12,7 @@ import {
 import { AppTitlebar } from './features/navigation/AppTitlebar';
 import { detectDesktopPlatform } from './features/navigation/desktop-platform';
 import { ProviderPage } from './features/providers/ProviderPage';
+import { SettingsPage } from './features/settings/SettingsPage';
 import {
   type StartTranslationInput,
   TranslationWorkspace,
@@ -45,6 +46,9 @@ import {
   type TranslationJob,
   type UpdateProviderModelSettingsInput,
 } from './lib/api';
+import { I18nProvider } from './i18n/I18nProvider';
+import { useI18n } from './i18n/i18n';
+import type { MessageKey } from './i18n/messages';
 import './App.css';
 
 /** 把新任务插到列表顶部，并替换后端刷新返回的同 id 快照。 */
@@ -108,23 +112,23 @@ function applyDeletedProvider(
   );
 }
 
-/** 将初始化阶段的未知异常压缩成一条不泄露本地路径的提示。 */
-function loadErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.name === 'AbortError') return '';
-  return '部分本地数据暂时不可用，请确认 sidecar 已启动。';
+/** 将初始化阶段的未知异常压缩成一条不泄露本地路径的 i18n key。 */
+function loadErrorKey(error: unknown): MessageKey | null {
+  if (error instanceof Error && error.name === 'AbortError') return null;
+  return 'app.loadError';
 }
 
-/** PageFerry 的唯一主窗口。 */
-export function App() {
+/** PageFerry 的唯一主窗口内容。 */
+function AppContent() {
+  const { t } = useI18n();
   const [activeRoute, setActiveRoute] = useState<AppRoute>('translate');
   const [serviceState, setServiceState] = useState<ServiceState>('checking');
-  const [serviceVersion, setServiceVersion] = useState('');
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [jobs, setJobs] = useState<TranslationJob[]>([]);
   const [sessionJobIds, setSessionJobIds] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<MessageKey | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -142,7 +146,6 @@ export function App() {
       const [healthResult, catalogResult, providerResult, jobsResult] = results;
       if (healthResult.status === 'fulfilled') {
         setServiceState('connected');
-        setServiceVersion(healthResult.value.data.version);
       } else {
         setServiceState('offline');
       }
@@ -156,8 +159,8 @@ export function App() {
         (result) => result.status === 'rejected',
       );
       if (firstFailure?.status === 'rejected') {
-        const message = loadErrorMessage(firstFailure.reason);
-        if (message) setLoadError(message);
+        const key = loadErrorKey(firstFailure.reason);
+        if (key) setLoadError(key);
       }
     }
 
@@ -181,8 +184,8 @@ export function App() {
         const next = await getJobs(controller.signal);
         if (!disposed) setJobs(next);
       } catch (error) {
-        if (!disposed && loadErrorMessage(error)) {
-          setLoadError('任务状态暂时无法刷新。');
+        if (!disposed && loadErrorKey(error)) {
+          setLoadError('app.pollError');
         }
       } finally {
         if (!disposed) timer = window.setTimeout(pollJobs, 1400);
@@ -345,14 +348,6 @@ export function App() {
 
   const sessionJobIdSet = new Set(sessionJobIds);
   const sessionJobs = jobs.filter((job) => sessionJobIdSet.has(job.id));
-  const activeProviderCount = providers.filter(
-    (provider) => provider.active,
-  ).length;
-  const serviceLabel = {
-    checking: '正在连接',
-    connected: serviceVersion ? `v${serviceVersion}` : 'PageFerry',
-    offline: '服务离线',
-  }[serviceState];
   const desktopPlatform = detectDesktopPlatform(window.navigator.userAgent);
 
   return (
@@ -365,9 +360,7 @@ export function App() {
       <AppSidebar
         activeRoute={activeRoute}
         collapsed={sidebarCollapsed}
-        activeProviderCount={activeProviderCount}
         serviceState={serviceState}
-        serviceLabel={serviceLabel}
         onNavigate={setActiveRoute}
         onToggleCollapsed={toggleSidebar}
       />
@@ -376,9 +369,9 @@ export function App() {
         {loadError ? (
           <div className="app-alert" role="alert">
             <AlertTriangle aria-hidden="true" size={15} />
-            <span>{loadError}</span>
+            <span>{t(loadError)}</span>
             <button type="button" onClick={() => setLoadError(null)}>
-              关闭
+              {t('app.dismiss')}
             </button>
           </div>
         ) : null}
@@ -415,8 +408,20 @@ export function App() {
               onDelete={removeProvider}
             />
           </div>
+          <div className="route-view" hidden={activeRoute !== 'settings'}>
+            <SettingsPage />
+          </div>
         </main>
       </div>
     </div>
+  );
+}
+
+/** 安装应用级 locale provider，切换语言时不 remount 主窗口或清空草稿。 */
+export function App() {
+  return (
+    <I18nProvider>
+      <AppContent />
+    </I18nProvider>
   );
 }

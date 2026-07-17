@@ -147,6 +147,11 @@ async function chooseSelectOption(label: string, optionName: string) {
   fireEvent.click(option);
 }
 
+/** 等待 bundled catalog 进入 provider model inventory，避免用静态版本文案充当加载信号。 */
+async function waitForInitialState() {
+  await screen.findAllByText('DeepSeek V4 Flash');
+}
+
 describe('App', () => {
   let configured = true;
   let initialJobs: ReturnType<typeof translationJob>[] = [];
@@ -156,14 +161,17 @@ describe('App', () => {
   let lastProviderMutation: ReturnType<typeof providerStatus> | null;
   let deleteCompleted: boolean;
   let failProviderRefreshAfterDelete: boolean;
+  let healthAvailable: boolean;
 
   beforeEach(() => {
+    vi.spyOn(window.navigator, 'languages', 'get').mockReturnValue(['zh-CN']);
     configured = true;
     initialJobs = [];
     statusFactory = () => providerStatus(configured);
     providerListFactory = () => [statusFactory()];
     deleteCompleted = false;
     failProviderRefreshAfterDelete = false;
+    healthAvailable = true;
     lastProviderMutation = null;
     discoveryModels = [
       {
@@ -184,6 +192,9 @@ describe('App', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/healthz')) {
+        if (!healthAvailable) {
+          return jsonResponse({ message: 'service unavailable' }, 503);
+        }
         return jsonResponse({
           code: 'success',
           data: { service: 'pageferry-api', version: '0.1.0' },
@@ -370,25 +381,86 @@ describe('App', () => {
   it('并行读取本地服务、catalog、provider 与任务', async () => {
     render(<App />);
 
-    const version = await screen.findByText('v0.1.0');
-    expect(version).toBeInTheDocument();
-    expect(
-      version.closest('.sidebar-service')?.querySelector('svg'),
-    ).toBeNull();
+    await waitForInitialState();
     expect(
       screen.getByRole('heading', { name: '文件翻译' }),
     ).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /模型服务/ })).toHaveTextContent(
-      '1',
+    const sidebar = screen.getByRole('complementary', { name: '主要导航' });
+    const modelServices = within(sidebar).getByRole('button', {
+      name: /模型服务/,
+    });
+    expect(modelServices).toHaveTextContent('模型服务');
+    expect(modelServices.querySelector('small')).toBeNull();
+    expect(modelServices.parentElement).toHaveClass(
+      'sidebar-nav-group--services',
     );
+    expect(modelServices.querySelector('.lucide-cloud')).not.toBeNull();
+    expect(sidebar.querySelector('.sidebar-service')).toBeNull();
+    expect(within(sidebar).queryByText(/0\.1\.0/)).not.toBeInTheDocument();
+    expect(sidebar.lastElementChild).toHaveClass('sidebar-footer');
     expect(screen.queryByText('暂无记录')).not.toBeInTheDocument();
     expect(globalThis.fetch).toHaveBeenCalledTimes(5);
+
+    fireEvent.click(modelServices);
+    expect(
+      screen.queryByText('供应商 5 个 · 已启用 1 个'),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(within(sidebar).getByRole('button', { name: '设置' }));
+    expect(screen.getByText('版本 v0.1.0')).toBeVisible();
+  });
+
+  it('sidecar 离线时仍在关于区展示客户端版本', async () => {
+    healthAvailable = false;
+    render(<App />);
+
+    await waitForInitialState();
+    const sidebar = screen.getByRole('complementary', { name: '主要导航' });
+    expect(within(sidebar).getByRole('status')).toHaveTextContent('服务离线');
+
+    fireEvent.click(within(sidebar).getByRole('button', { name: '设置' }));
+    expect(screen.getByText('版本 v0.1.0')).toBeVisible();
+  });
+
+  it('从侧栏底部切换应用语言，并保留翻译工作区草稿', async () => {
+    render(<App />);
+    await waitForInitialState();
+
+    const input = document.querySelector('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(['draft'], 'locale-draft.docx')] },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: '设置' }));
+    expect(screen.getByRole('heading', { name: '设置' })).toBeInTheDocument();
+    await chooseSelectOption('应用语言', 'English');
+
+    expect(
+      screen.getByRole('heading', { name: 'Settings' }),
+    ).toBeInTheDocument();
+    expect(window.localStorage.getItem('pageferry.ui-locale.v1')).toBe('en');
+
+    fireEvent.click(screen.getByRole('button', { name: /Model services/ }));
+    expect(
+      screen.getByRole('heading', { name: 'Model services' }),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search providers')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'File translation' }));
+    expect(screen.getByText('locale-draft.docx')).toBeInTheDocument();
+    const targetLanguage = screen.getByRole('combobox', {
+      name: 'Target language',
+    });
+    fireEvent.keyDown(targetLanguage, { key: 'ArrowDown' });
+    expect(
+      await screen.findByRole('option', { name: 'Japanese' }),
+    ).toHaveTextContent('日本語');
   });
 
   it('将历史任务和文件翻译页彻底分开', async () => {
     initialJobs = [translationJob('old-contract.docx', 'history-1')];
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     expect(
       screen.queryByRole('button', { name: '打开文件' }),
@@ -410,12 +482,12 @@ describe('App', () => {
 
   it('切换一级页面时保留尚未提交的文件、语言与 API Key', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
     fireEvent.change(input as HTMLInputElement, {
       target: { files: [new File(['draft'], 'draft.docx')] },
     });
-    await chooseSelectOption('源语言', 'English');
+    await chooseSelectOption('源语言', '英语');
 
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
     fireEvent.change(screen.getByLabelText('API Key'), {
@@ -428,13 +500,13 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '文件翻译' }));
     expect(screen.getByText('draft.docx')).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: '源语言' })).toHaveTextContent(
-      'English',
+      '英语',
     );
   });
 
   it('通过可访问状态收起并重新展开侧边栏', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     expect(screen.getByText('Page')).toBeInTheDocument();
     expect(screen.getByText('Ferry')).toBeInTheDocument();
@@ -459,7 +531,7 @@ describe('App', () => {
 
   it('鼠标收起侧边栏后不把展开按钮留在焦点态', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     const collapseButton = screen.getByRole('button', { name: '收起侧边栏' });
     collapseButton.focus();
@@ -473,7 +545,7 @@ describe('App', () => {
 
   it('让窗口拖拽带横跨在侧栏与主内容之前', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     const titlebar = screen.getByRole('banner', { name: '窗口标题栏' });
     const dragSurface = titlebar.querySelector('.titlebar-drag-surface');
@@ -488,29 +560,29 @@ describe('App', () => {
 
   it('在自定义下拉框中提供中文语种，并在源语言明确时交换', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     const swapButton = screen.getByRole('button', {
       name: '交换源语言和目标语言',
     });
     expect(swapButton).toBeDisabled();
 
-    await chooseSelectOption('源语言', 'English');
-    await chooseSelectOption('目标语言', '繁體中文（香港）');
+    await chooseSelectOption('源语言', '英语');
+    await chooseSelectOption('目标语言', '繁体中文（香港）');
     expect(swapButton).toBeEnabled();
     fireEvent.click(swapButton);
 
     expect(screen.getByRole('combobox', { name: '源语言' })).toHaveTextContent(
-      '繁體中文（香港）',
+      '繁体中文（香港）',
     );
     expect(
       screen.getByRole('combobox', { name: '目标语言' }),
-    ).toHaveTextContent('English');
+    ).toHaveTextContent('英语');
   });
 
   it('拒绝未支持格式，且不宣称支持 PDF 或 XLSX', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
     const unsupportedFile = new File(['content'], 'sample.pdf', {
       type: 'application/pdf',
@@ -532,7 +604,7 @@ describe('App', () => {
 
   it('DOCX 高级选项进入 upload payload，并只在本次任务区显示结果', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
     const file = new File(['content'], 'sample.docx', {
       type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -573,7 +645,7 @@ describe('App', () => {
 
   it('PPTX 默认翻译表格和 speaker notes', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
     const file = new File(['content'], 'slides.pptx');
 
@@ -599,7 +671,7 @@ describe('App', () => {
 
   it('TXT 和 Markdown 不显示也不提交虚假高级选项', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
     const file = new File(['content'], 'readme.md');
 
@@ -619,7 +691,7 @@ describe('App', () => {
   it('首次验证时整组启用同步得到的模型', async () => {
     configured = false;
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
     expect(
@@ -675,7 +747,7 @@ describe('App', () => {
 
   it('已配置供应商的手动模型先保持关闭，再按行验证启用', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
 
     fireEvent.click(screen.getByRole('button', { name: '添加模型' }));
@@ -726,7 +798,7 @@ describe('App', () => {
   it('同步模型不可用时给出可访问的具体原因', async () => {
     configured = false;
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
 
     const syncButton = screen.getByRole('button', {
@@ -750,7 +822,7 @@ describe('App', () => {
       },
     ];
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
     fireEvent.click(screen.getByRole('button', { name: '同步模型' }));
     expect(await screen.findByText(/模型同步完成/)).toBeInTheDocument();
@@ -798,7 +870,7 @@ describe('App', () => {
 
   it('供应商开关只改变 active，不走删除并可恢复翻译模型', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
 
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
     const activeSwitch = screen.getByRole('switch', {
@@ -841,7 +913,7 @@ describe('App', () => {
   it('preset 移除配置成功但刷新失败时本地重置，并从翻译模型中移除', async () => {
     failProviderRefreshAfterDelete = true;
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     expect(
       screen.getByRole('combobox', { name: '翻译模型' }),
     ).toHaveTextContent('DeepSeek V4 Flash');
@@ -869,7 +941,7 @@ describe('App', () => {
     providerListFactory = () => [providerStatus(false), customProviderStatus()];
     failProviderRefreshAfterDelete = true;
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     expect(
       screen.getByRole('combobox', { name: '翻译模型' }),
     ).toHaveTextContent('内部翻译模型');
@@ -911,7 +983,7 @@ describe('App', () => {
       ],
     });
     const healthyView = render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     expect(
       screen.getByRole('combobox', { name: '翻译模型' }),
     ).toHaveTextContent('DeepSeek Chat');
@@ -922,7 +994,7 @@ describe('App', () => {
       probe_status: 'failed',
     });
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     expect(
       screen.queryByRole('combobox', { name: '翻译模型' }),
     ).not.toBeInTheDocument();
@@ -933,7 +1005,7 @@ describe('App', () => {
 
   it('切换 provider 时重新隐藏未保存的 API Key', async () => {
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
     fireEvent.change(screen.getByLabelText('API Key'), {
       target: { value: 'sk-visible-draft' },
@@ -961,7 +1033,7 @@ describe('App', () => {
       },
     ];
     render(<App />);
-    await screen.findByText('v0.1.0');
+    await waitForInitialState();
     fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
 
     const state = screen.getByLabelText(

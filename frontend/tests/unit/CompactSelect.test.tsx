@@ -11,6 +11,29 @@ const options = [
 ] as const;
 
 describe('CompactSelect', () => {
+  it('展开时显示本族语说明，选中后的 trigger 只保留主名称', async () => {
+    render(
+      <CompactSelect
+        ariaLabel="目标语言"
+        value="ja"
+        options={[
+          { value: 'en', label: '英语', description: 'English' },
+          { value: 'ja', label: '日语', description: '日本語' },
+        ]}
+        onValueChange={() => undefined}
+      />,
+    );
+
+    const trigger = screen.getByRole('combobox', { name: '目标语言' });
+    expect(trigger).toHaveTextContent('日语');
+    expect(trigger).not.toHaveTextContent('日本語');
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    expect(
+      await screen.findByRole('option', { name: '日语' }),
+    ).toHaveTextContent('日本語');
+  });
+
   it('鼠标完成选择后移走 trigger 焦点', async () => {
     const onValueChange = vi.fn();
     render(

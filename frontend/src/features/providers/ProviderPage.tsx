@@ -24,6 +24,7 @@ import { Dialog, Switch } from 'radix-ui';
 import { useEffect, useRef, useState, type MouseEvent } from 'react';
 
 import { ProviderIcon } from '@/features/providers/ProviderIcon';
+import { type Translate, useI18n } from '@/i18n/i18n';
 import {
   ApiError,
   type ConfigureProviderInput,
@@ -137,15 +138,19 @@ type PendingAction =
 const DEFAULT_PER_JOB_CONCURRENCY = 6;
 const DEFAULT_GLOBAL_CONCURRENCY = 15;
 
-const reasoningPolicyLabels: Record<ReasoningPolicy, string> = {
-  provider_default: '供应商默认',
-  off: '关闭思考',
-  on: '开启思考',
-  low: '低',
-  medium: '中',
-  high: '高',
-  max: '最高',
-};
+/** 返回 reasoning policy 在当前 UI locale 下的名称。 */
+function reasoningPolicyLabel(policy: ReasoningPolicy, t: Translate): string {
+  const keys: Record<ReasoningPolicy, Parameters<Translate>[0]> = {
+    provider_default: 'providers.reasoning.providerDefault',
+    off: 'providers.reasoning.off',
+    on: 'providers.reasoning.on',
+    low: 'providers.reasoning.low',
+    medium: 'providers.reasoning.medium',
+    high: 'providers.reasoning.high',
+    max: 'providers.reasoning.max',
+  };
+  return t(keys[policy]);
+}
 
 const emptyCustomProviderDraft: CustomProviderDraft = {
   displayName: '',
@@ -359,38 +364,42 @@ function initialModelSettingsDraft(
 }
 
 /** 校验模型并发上限，保持与 backend 的窄 contract 一致。 */
-function modelSettingsError(draft: ModelSettingsDraft | null): string | null {
+function modelSettingsError(
+  draft: ModelSettingsDraft | null,
+  t: Translate,
+): string | null {
   if (draft === null) return null;
   const perJobRaw = draft.perJobConcurrency.trim();
   const globalRaw = draft.globalConcurrency.trim();
   if (!/^\d+$/.test(perJobRaw) || !/^\d+$/.test(globalRaw)) {
-    return '并发上限必须是 1 到 32 的整数。';
+    return t('providers.validation.settingsInteger');
   }
   const perJob = Number(perJobRaw);
   const global = Number(globalRaw);
   if (perJob < 1 || global < 1 || perJob > 32 || global > 32) {
-    return '并发上限必须在 1 到 32 之间。';
+    return t('providers.validation.settingsRange');
   }
-  if (perJob > global) return '单任务并发不能超过跨任务总并发。';
+  if (perJob > global) return t('providers.validation.settingsOrder');
   return null;
 }
 
 /** 把 provider probe 错误转换为不泄露上游正文的用户提示。 */
-function providerErrorMessage(error: unknown): string {
+function providerErrorMessage(error: unknown, t: Translate): string {
   if (!(error instanceof ApiError)) {
-    return error instanceof Error ? error.message : '模型服务操作失败。';
+    return t('providers.error.operationFailed');
   }
-  const messages: Record<string, string> = {
-    key: 'API Key 无效或没有访问权限。',
-    endpoint: 'Provider endpoint 当前不可用。',
-    model: '当前账号无法使用所选模型。',
-    model_required: '至少保留一个已启用且验证通过的模型。',
-    rate_limit: '请求过于频繁，请稍后再试。',
-    network: '无法连接模型服务，请检查网络。',
-    protocol: '模型服务返回了无法识别的响应。',
-    conflict: '模型服务配置已变化，请重试当前操作。',
+  const messageKeys: Record<string, Parameters<Translate>[0]> = {
+    key: 'providers.error.key',
+    endpoint: 'providers.error.endpoint',
+    model: 'providers.error.model',
+    model_required: 'providers.error.modelRequired',
+    rate_limit: 'providers.error.rateLimit',
+    network: 'providers.error.network',
+    protocol: 'providers.error.protocol',
+    conflict: 'providers.error.conflict',
   };
-  return (error.code && messages[error.code]) || error.message;
+  const messageKey = error.code ? messageKeys[error.code] : undefined;
+  return messageKey ? t(messageKey) : t('providers.error.operationFailed');
 }
 
 /** 只有已配置且明确 active 的 provider 才能参与新任务。 */
@@ -399,10 +408,15 @@ function providerIsActive(status: ProviderStatus | undefined): boolean {
 }
 
 /** 返回 provider 的短运行状态，左栏不重复放置开关。 */
-function providerStateLabel(status: ProviderStatus | undefined): string {
-  if (status?.configured !== true) return '未配置';
-  if (status.probe_status === 'failed') return '异常';
-  return providerIsActive(status) ? '已启用' : '已停用';
+function providerStateLabel(
+  status: ProviderStatus | undefined,
+  t: Translate,
+): string {
+  if (status?.configured !== true) return t('providers.state.unconfigured');
+  if (status.probe_status === 'failed') return t('providers.state.error');
+  return providerIsActive(status)
+    ? t('providers.state.enabled')
+    : t('providers.state.disabled');
 }
 
 /** 判断 HTTP endpoint 是否明确落在本机 loopback，避免明文发送 Bearer Key。 */
@@ -429,9 +443,9 @@ function normalizeProviderBaseUrl(rawUrl: string): string {
 }
 
 /** 在提交前对齐 backend 对 Base URL 的安全边界。 */
-function providerBaseUrlError(rawUrl: string): string | null {
+function providerBaseUrlError(rawUrl: string, t: Translate): string | null {
   const candidate = rawUrl.trim();
-  if (!candidate) return '请输入 API 地址。';
+  if (!candidate) return t('providers.validation.baseUrlRequired');
   if (
     candidate.length > 2048 ||
     /\s/.test(candidate) ||
@@ -439,29 +453,34 @@ function providerBaseUrlError(rawUrl: string): string | null {
     candidate.includes('?') ||
     candidate.includes('#')
   ) {
-    return 'API 地址格式无效。';
+    return t('providers.validation.baseUrlInvalid');
   }
   try {
     const url = new URL(candidate);
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      return 'API 地址必须使用 http 或 https。';
+      return t('providers.validation.baseUrlScheme');
     }
-    if (url.username || url.password) return 'API 地址不能包含账号信息。';
+    if (url.username || url.password) {
+      return t('providers.validation.baseUrlCredentials');
+    }
     if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
-      return '公网或局域网服务必须使用 HTTPS；HTTP 仅支持本机 loopback。';
+      return t('providers.validation.baseUrlHttps');
     }
   } catch {
-    return '请输入完整的 API 地址。';
+    return t('providers.validation.baseUrlComplete');
   }
   return null;
 }
 
 /** 同时校验 custom provider 的名称与 endpoint。 */
-function customProviderFormError(draft: CustomProviderDraft): string | null {
+function customProviderFormError(
+  draft: CustomProviderDraft,
+  t: Translate,
+): string | null {
   const displayName = draft.displayName.trim();
-  if (!displayName) return '请输入供应商名称。';
-  if (displayName.length > 80) return '供应商名称不能超过 80 个字符。';
-  return providerBaseUrlError(draft.baseUrl);
+  if (!displayName) return t('providers.validation.nameRequired');
+  if (displayName.length > 80) return t('providers.validation.nameMax');
+  return providerBaseUrlError(draft.baseUrl, t);
 }
 
 /** 识别 ASCII control 与 DEL，避免不可见字符进入持久化 model identity。 */
@@ -476,30 +495,33 @@ function containsControlCharacter(value: string): boolean {
 function manualModelFormError(
   draft: ManualModelDraft,
   models: ProviderModelStatus[],
+  t: Translate,
 ): string | null {
   const modelId = draft.modelId.trim();
   const displayName = draft.displayName.trim();
-  if (!modelId) return '请输入模型 ID。';
-  if (modelId.length > 256) return '模型 ID 不能超过 256 个字符。';
+  if (!modelId) return t('providers.validation.modelIdRequired');
+  if (modelId.length > 256) return t('providers.validation.modelIdMax');
   if (/\s/u.test(modelId) || containsControlCharacter(modelId)) {
-    return '模型 ID 不能包含空白字符或控制字符。';
+    return t('providers.validation.modelIdCharacters');
   }
-  if (displayName.length > 120) return '显示名称不能超过 120 个字符。';
+  if (displayName.length > 120) {
+    return t('providers.validation.displayNameMax');
+  }
   if (containsControlCharacter(draft.displayName)) {
-    return '显示名称不能包含控制字符。';
+    return t('providers.validation.displayNameCharacters');
   }
   if (models.some((model) => model.id === modelId)) {
-    return '该模型已在当前列表中。';
+    return t('providers.validation.modelDuplicateCurrent');
   }
   return null;
 }
 
 /** 把手动添加的重复竞态转换成明确提示，其余错误沿用 provider 安全文案。 */
-function manualModelRequestError(error: unknown): string {
+function manualModelRequestError(error: unknown, t: Translate): string {
   if (error instanceof ApiError && error.status === 409) {
-    return '该模型已存在。';
+    return t('providers.validation.modelDuplicateServer');
   }
-  return providerErrorMessage(error);
+  return providerErrorMessage(error, t);
 }
 
 /** 独立模型服务页，保持 provider 列表和当前配置上下文同时可见。 */
@@ -517,6 +539,9 @@ export function ProviderPage({
   onSaveModelSettings,
   onDelete,
 }: ProviderPageProps) {
+  const { t } = useI18n();
+  const tRef = useRef(t);
+  tRef.current = t;
   const definitions = providerDefinitions(catalog, providers);
   const statuses = new Map(
     providers.map((provider) => [provider.provider_id, provider]),
@@ -580,7 +605,7 @@ export function ProviderPage({
     settingsModelId === null
       ? undefined
       : models.find((model) => model.id === settingsModelId);
-  const settingsValidationError = modelSettingsError(modelSettingsDraft);
+  const settingsValidationError = modelSettingsError(modelSettingsDraft, t);
   const defaultBaseUrl = selectedDefinition?.baseUrl ?? '';
   const draft =
     drafts[selectedProviderId] ??
@@ -592,7 +617,7 @@ export function ProviderPage({
     );
   const baseUrlError = selectedDefinition?.isCustom
     ? null
-    : providerBaseUrlError(draft.baseUrl);
+    : providerBaseUrlError(draft.baseUrl, t);
   const normalizedDraftBaseUrl = normalizeProviderBaseUrl(draft.baseUrl);
   const normalizedDefaultBaseUrl = normalizeProviderBaseUrl(defaultBaseUrl);
   const baseUrlUsesDefault =
@@ -644,15 +669,18 @@ export function ProviderPage({
     configured && draft.defaultModelId !== selectedStatus?.default_model_id;
   const connectionDirty = apiKeyDirty || baseUrlChanged || defaultModelChanged;
   const credentialFeedback = credentialLoading
-    ? { message: '正在读取已保存的 API Key…', tone: 'loading' as const }
+    ? {
+        message: t('providers.feedback.readingKey'),
+        tone: 'loading' as const,
+      }
     : pendingAction === 'save'
       ? {
-          message: '正在验证并保存模型服务配置…',
+          message: t('providers.feedback.saving'),
           tone: 'loading' as const,
         }
       : pendingAction === 'probe'
         ? {
-            message: '正在检测 API Key 与模型连接…',
+            message: t('providers.feedback.probing'),
             tone: 'loading' as const,
           }
         : credential.providerId === selectedProviderId && credential.notice
@@ -717,7 +745,7 @@ export function ProviderPage({
             ? {
                 ...current,
                 status: 'error',
-                notice: providerErrorMessage(error),
+                notice: providerErrorMessage(error, tRef.current),
                 noticeTone: 'error',
               }
             : current,
@@ -728,21 +756,21 @@ export function ProviderPage({
   }, [configured, onLoadApiKey, selectedProviderId]);
 
   const syncDisabledReason = !supportsModelSync
-    ? '该 provider 使用内置模型目录，无需远程同步'
+    ? t('providers.syncReason.catalog')
     : baseUrlError !== null
-      ? '请先检查 Base URL'
+      ? t('providers.syncReason.baseUrl')
       : credentialLoading
-        ? '请等待已保存的 API Key 读取完成'
+        ? t('providers.syncReason.loadingKey')
         : configured && baseUrlChanged
-          ? '请先保存新的 Base URL，再同步模型'
+          ? t('providers.syncReason.saveBaseUrl')
           : apiKeyChanged
-            ? '请先保存新 API Key，再同步模型'
+            ? t('providers.syncReason.saveKey')
             : defaultModelChanged
-              ? '请先保存新的默认模型，再同步模型'
+              ? t('providers.syncReason.saveDefault')
               : !configured && !apiKey.trim()
-                ? '请先输入 API Key，再同步模型列表'
+                ? t('providers.syncReason.enterKey')
                 : pendingAction !== null
-                  ? '请等待当前操作完成'
+                  ? t('providers.syncReason.pending')
                   : null;
 
   /** 合并当前 provider 的部分草稿，避免切换 provider 时丢失未保存设置。 */
@@ -818,17 +846,15 @@ export function ProviderPage({
     setNotice(null);
     try {
       await openExternalHttpUrl(url);
-    } catch (error) {
-      setNotice(
-        error instanceof Error ? error.message : '系统无法打开外部链接。',
-      );
+    } catch {
+      setNotice(t('providers.error.externalOpen'));
       setNoticeTone('error');
     }
   }
 
   /** 创建 custom provider 定义，随后直接进入同一套 Key 与模型配置区。 */
   async function createCustom() {
-    const validationError = customProviderFormError(customDraft);
+    const validationError = customProviderFormError(customDraft, t);
     if (validationError !== null) {
       setCustomFormNotice(validationError);
       return;
@@ -844,10 +870,10 @@ export function ProviderPage({
       setCustomDialogOpen(false);
       setCustomDraft(emptyCustomProviderDraft);
       selectProvider(created.provider_id);
-      setNotice('供应商已创建，请输入 API Key；可先检测，再保存配置。');
+      setNotice(t('providers.notice.created'));
       setNoticeTone('success');
     } catch (error) {
-      setCustomFormNotice(providerErrorMessage(error));
+      setCustomFormNotice(providerErrorMessage(error, t));
     } finally {
       setCreatingCustom(false);
     }
@@ -855,7 +881,7 @@ export function ProviderPage({
 
   /** 登记手动 model，并只在当前配置草稿中勾选，等待统一 probe 后再真正启用。 */
   async function createManualModel() {
-    const validationError = manualModelFormError(manualModelDraft, models);
+    const validationError = manualModelFormError(manualModelDraft, models, t);
     if (validationError !== null) {
       setManualModelFormNotice(validationError);
       return;
@@ -902,12 +928,16 @@ export function ProviderPage({
       setManualModelDraft(emptyManualModelDraft);
       setNotice(
         configured
-          ? `${next.display_name ?? next.id} 已添加；开启后将验证并启用。`
-          : `${next.display_name ?? next.id} 已添加；验证后默认启用。`,
+          ? t('providers.notice.manualAddedConfigured', {
+              name: next.display_name ?? next.id,
+            })
+          : t('providers.notice.manualAddedNew', {
+              name: next.display_name ?? next.id,
+            }),
       );
       setNoticeTone('success');
     } catch (error) {
-      setManualModelFormNotice(manualModelRequestError(error));
+      setManualModelFormNotice(manualModelRequestError(error, t));
     } finally {
       endAction();
     }
@@ -943,11 +973,16 @@ export function ProviderPage({
       const next = await onProviderActiveChange(selectedProviderId, active);
       convergeProviderSnapshot(next);
       setNotice(
-        `${selectedDefinition?.display_name ?? selectedProviderId} 已${active ? '启用' : '停用'}。`,
+        t(
+          active
+            ? 'providers.notice.providerEnabled'
+            : 'providers.notice.providerDisabled',
+          { name: selectedDefinition?.display_name ?? selectedProviderId },
+        ),
       );
       setNoticeTone('success');
     } catch (error) {
-      setNotice(providerErrorMessage(error));
+      setNotice(providerErrorMessage(error, t));
       setNoticeTone('error');
     } finally {
       endAction();
@@ -975,11 +1010,16 @@ export function ProviderPage({
       );
       convergeProviderSnapshot(next);
       setNotice(
-        `${model?.display_name ?? modelId} 已${enabled ? '启用' : '停用'}。`,
+        t(
+          enabled
+            ? 'providers.notice.modelEnabled'
+            : 'providers.notice.modelDisabled',
+          { name: model?.display_name ?? modelId },
+        ),
       );
       setNoticeTone('success');
     } catch (error) {
-      setNotice(providerErrorMessage(error));
+      setNotice(providerErrorMessage(error, t));
       setNoticeTone('error');
     } finally {
       setPendingModelId(null);
@@ -1016,7 +1056,12 @@ export function ProviderPage({
       if (configured) {
         const result = await onSyncModels(selectedProviderId);
         setNotice(
-          `模型同步完成：新增 ${result.added} 个，恢复 ${result.restored} 个，标记不可用 ${result.unavailable} 个，未变化 ${result.unchanged} 个。`,
+          t('providers.notice.syncComplete', {
+            added: result.added,
+            restored: result.restored,
+            unavailable: result.unavailable,
+            unchanged: result.unchanged,
+          }),
         );
       } else {
         const result = await discoverProviderModels(selectedProviderId, {
@@ -1051,12 +1096,12 @@ export function ProviderPage({
           }
         }
         setNotice(
-          `已发现 ${result.models.length} 个模型；保存配置后才会写入模型目录。`,
+          t('providers.notice.discovered', { count: result.models.length }),
         );
       }
       setNoticeTone('success');
     } catch (error) {
-      setNotice(providerErrorMessage(error));
+      setNotice(providerErrorMessage(error, t));
       setNoticeTone('error');
     } finally {
       endAction();
@@ -1085,12 +1130,16 @@ export function ProviderPage({
         ...(draft.defaultModelId ? { model_id: draft.defaultModelId } : {}),
       });
       const modelName = result.display_name.trim() || result.model_id;
-      const unsavedSuffix = connectionDirty ? '，更改尚未保存' : '';
       setCredential((current) =>
         current.providerId === providerId
           ? {
               ...current,
-              notice: `检测通过 · ${modelName} · ${result.latency_ms} ms${unsavedSuffix}`,
+              notice: t(
+                connectionDirty
+                  ? 'providers.notice.probePassedUnsaved'
+                  : 'providers.notice.probePassed',
+                { model: modelName, latency: result.latency_ms },
+              ),
               noticeTone: 'success',
             }
           : current,
@@ -1100,7 +1149,7 @@ export function ProviderPage({
         current.providerId === providerId
           ? {
               ...current,
-              notice: providerErrorMessage(error),
+              notice: providerErrorMessage(error, t),
               noticeTone: 'error',
             }
           : current,
@@ -1157,8 +1206,10 @@ export function ProviderPage({
               status: 'ready',
               notice:
                 next.latency_ms === null
-                  ? '配置已保存。'
-                  : `配置已保存 · 连接延迟 ${next.latency_ms} ms`,
+                  ? t('providers.notice.saved')
+                  : t('providers.notice.savedLatency', {
+                      latency: next.latency_ms,
+                    }),
               noticeTone: 'success',
             }
           : current,
@@ -1172,7 +1223,7 @@ export function ProviderPage({
           ? {
               ...current,
               status: 'ready',
-              notice: providerErrorMessage(error),
+              notice: providerErrorMessage(error, t),
               noticeTone: 'error',
             }
           : current,
@@ -1201,7 +1252,7 @@ export function ProviderPage({
       setNotice(successMessage);
       setNoticeTone('success');
     } catch (error) {
-      setSettingsRequestError(providerErrorMessage(error));
+      setSettingsRequestError(providerErrorMessage(error, t));
     } finally {
       endAction();
     }
@@ -1238,7 +1289,9 @@ export function ProviderPage({
             ? null
             : globalConcurrency,
       },
-      `${settingsModel.display_name ?? settingsModel.id} 的运行设置已保存。`,
+      t('providers.notice.settingsSaved', {
+        name: settingsModel.display_name ?? settingsModel.id,
+      }),
     );
   }
 
@@ -1251,7 +1304,9 @@ export function ProviderPage({
         per_job_concurrency_override: null,
         global_concurrency_override: null,
       },
-      `${settingsModel.display_name ?? settingsModel.id} 已恢复应用默认设置。`,
+      t('providers.notice.defaultsRestored', {
+        name: settingsModel.display_name ?? settingsModel.id,
+      }),
     );
   }
 
@@ -1291,11 +1346,13 @@ export function ProviderPage({
         setSelectedProviderId(nextProviderId);
       }
       setNotice(
-        `${selectedDefinition?.display_name ?? selectedProviderId} 配置已移除。`,
+        t('providers.notice.removed', {
+          name: selectedDefinition?.display_name ?? selectedProviderId,
+        }),
       );
       setNoticeTone('success');
     } catch (error) {
-      setNotice(providerErrorMessage(error));
+      setNotice(providerErrorMessage(error, t));
       setNoticeTone('error');
     } finally {
       endAction();
@@ -1306,13 +1363,18 @@ export function ProviderPage({
   function renderProviderItem(definition: ProviderViewDefinition) {
     const status = statuses.get(definition.id);
     const selected = definition.id === selectedProviderId;
-    const stateLabel = providerStateLabel(status);
+    const stateLabel = providerStateLabel(status, t);
+    const stateHealthy =
+      providerIsActive(status) && status?.probe_status !== 'failed';
     return (
       <button
         className={`provider-list-item ${selected ? 'provider-list-item--selected' : ''}`}
         type="button"
         key={definition.id}
-        aria-label={`${definition.display_name}，${stateLabel}`}
+        aria-label={t('providers.itemAria', {
+          name: definition.display_name,
+          state: stateLabel,
+        })}
         aria-pressed={selected}
         disabled={pendingAction !== null}
         onClick={() => selectProvider(definition.id)}
@@ -1328,7 +1390,7 @@ export function ProviderPage({
         </span>
         <i
           className={
-            stateLabel === '已启用'
+            stateHealthy
               ? 'provider-dot provider-dot--connected'
               : 'provider-dot'
           }
@@ -1340,28 +1402,21 @@ export function ProviderPage({
 
   return (
     <section className="provider-page" aria-labelledby="provider-page-title">
-      <aside className="provider-list-pane" aria-label="模型供应商">
+      <aside
+        className="provider-list-pane"
+        aria-label={t('providers.listAria')}
+      >
         <header className="provider-list-header">
-          <div>
-            <h1 id="provider-page-title">模型服务</h1>
-            <span>
-              {definitions.length} 个供应商 ·{' '}
-              {
-                providers.filter((provider) => providerIsActive(provider))
-                  .length
-              }{' '}
-              个已启用
-            </span>
-          </div>
+          <h1 id="provider-page-title">{t('providers.title')}</h1>
         </header>
 
         <label className="provider-search">
           <Search aria-hidden="true" size={15} />
-          <span className="visually-hidden">搜索模型服务</span>
+          <span className="visually-hidden">{t('providers.searchLabel')}</span>
           <input
             type="search"
             value={query}
-            placeholder="搜索供应商"
+            placeholder={t('providers.searchPlaceholder')}
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
@@ -1371,7 +1426,7 @@ export function ProviderPage({
             className="provider-list-group"
             aria-labelledby="preset-provider-title"
           >
-            <h2 id="preset-provider-title">预设供应商</h2>
+            <h2 id="preset-provider-title">{t('providers.presetGroup')}</h2>
             {visiblePresets.map(renderProviderItem)}
           </section>
 
@@ -1380,13 +1435,13 @@ export function ProviderPage({
               className="provider-list-group"
               aria-labelledby="custom-provider-title"
             >
-              <h2 id="custom-provider-title">自定义</h2>
+              <h2 id="custom-provider-title">{t('providers.customGroup')}</h2>
               {visibleCustomProviders.map(renderProviderItem)}
             </section>
           ) : null}
 
           {visibleDefinitions.length === 0 ? (
-            <p className="provider-list-empty">没有匹配的供应商</p>
+            <p className="provider-list-empty">{t('providers.emptySearch')}</p>
           ) : null}
         </div>
 
@@ -1400,7 +1455,7 @@ export function ProviderPage({
           <Dialog.Trigger asChild>
             <button className="add-provider-button" type="button">
               <Plus aria-hidden="true" size={16} />
-              添加自定义供应商
+              {t('providers.addCustom')}
             </button>
           </Dialog.Trigger>
           <Dialog.Portal>
@@ -1411,16 +1466,18 @@ export function ProviderPage({
             >
               <header>
                 <div>
-                  <Dialog.Title>自定义供应商</Dialog.Title>
+                  <Dialog.Title>
+                    {t('providers.customDialog.title')}
+                  </Dialog.Title>
                   <Dialog.Description id="custom-provider-description">
-                    使用 OpenAI-compatible API
+                    {t('providers.customDialog.description')}
                   </Dialog.Description>
                 </div>
                 <Dialog.Close asChild>
                   <button
                     className="icon-button"
                     type="button"
-                    aria-label="关闭"
+                    aria-label={t('providers.customDialog.close')}
                   >
                     <X aria-hidden="true" size={17} />
                   </button>
@@ -1435,12 +1492,12 @@ export function ProviderPage({
                 }}
               >
                 <label>
-                  <span>供应商名称</span>
+                  <span>{t('providers.customDialog.name')}</span>
                   <input
                     autoFocus
                     type="text"
                     value={customDraft.displayName}
-                    placeholder="例如：公司内部网关"
+                    placeholder={t('providers.customDialog.namePlaceholder')}
                     onChange={(event) =>
                       setCustomDraft((current) => ({
                         ...current,
@@ -1450,7 +1507,7 @@ export function ProviderPage({
                   />
                 </label>
                 <label>
-                  <span>API 地址</span>
+                  <span>{t('providers.customDialog.apiAddress')}</span>
                   <input
                     type="url"
                     value={customDraft.baseUrl}
@@ -1472,7 +1529,7 @@ export function ProviderPage({
                 <footer>
                   <Dialog.Close asChild>
                     <button className="provider-custom-cancel" type="button">
-                      取消
+                      {t('providers.customDialog.cancel')}
                     </button>
                   </Dialog.Close>
                   <button
@@ -1489,7 +1546,9 @@ export function ProviderPage({
                     ) : (
                       <Plus aria-hidden="true" size={15} />
                     )}
-                    {creatingCustom ? '正在创建' : '创建并配置'}
+                    {creatingCustom
+                      ? t('providers.customDialog.creating')
+                      : t('providers.customDialog.submit')}
                   </button>
                 </footer>
               </form>
@@ -1520,12 +1579,14 @@ export function ProviderPage({
             ) : healthy ? (
               <CheckCircle2 aria-hidden="true" size={14} />
             ) : null}
-            <span>{providerStateLabel(selectedStatus)}</span>
+            <span>{providerStateLabel(selectedStatus, t)}</span>
             <Switch.Root
               className="model-switch"
               checked={providerActive}
               disabled={!configured || pendingAction !== null}
-              aria-label={`启用 ${selectedDefinition?.display_name ?? selectedProviderId} 供应商`}
+              aria-label={t('providers.enableProviderAria', {
+                name: selectedDefinition?.display_name ?? selectedProviderId,
+              })}
               onCheckedChange={(checked) => void setProviderActive(checked)}
             >
               <Switch.Thumb />
@@ -1538,13 +1599,13 @@ export function ProviderPage({
             <section className="provider-endpoint-section">
               <div className="provider-endpoint-heading">
                 <div>
-                  <h3>Base URL</h3>
+                  <h3>{t('providers.endpoint.baseUrlAria')}</h3>
                   <span>
                     {selectedDefinition.isCustom
-                      ? 'OpenAI-compatible · 创建后固定'
+                      ? t('providers.endpoint.customFixed')
                       : baseUrlUsesDefault
-                        ? '使用预置地址'
-                        : '使用自定义覆盖地址'}
+                        ? t('providers.endpoint.preset')
+                        : t('providers.endpoint.override')}
                   </span>
                 </div>
                 {!selectedDefinition.isCustom && !baseUrlUsesDefault ? (
@@ -1554,7 +1615,7 @@ export function ProviderPage({
                     onClick={() => updateBaseUrl(defaultBaseUrl)}
                   >
                     <RotateCcw aria-hidden="true" size={12} />
-                    恢复默认
+                    {t('providers.endpoint.restoreDefault')}
                   </button>
                 ) : null}
               </div>
@@ -1571,7 +1632,7 @@ export function ProviderPage({
                   <Link2 aria-hidden="true" size={15} />
                   <input
                     type="url"
-                    aria-label="Base URL"
+                    aria-label={t('providers.endpoint.baseUrlAria')}
                     aria-invalid={baseUrlError !== null}
                     autoComplete="off"
                     spellCheck="false"
@@ -1593,13 +1654,13 @@ export function ProviderPage({
           <section className="provider-config-section">
             <div className="provider-section-heading">
               <div>
-                <h3 id="credential-title">API Key</h3>
+                <h3 id="credential-title">{t('providers.key.aria')}</h3>
                 <span>
                   {apiKeyDirty
-                    ? '更改尚未保存'
+                    ? t('providers.key.unsaved')
                     : configured
-                      ? '已安全存入系统 Keychain'
-                      : '保存后存入系统 Keychain'}
+                      ? t('providers.key.saved')
+                      : t('providers.key.afterSave')}
                 </span>
               </div>
               {apiKeyUrl ? (
@@ -1611,7 +1672,7 @@ export function ProviderPage({
                     void openProviderExternalPage(event, apiKeyUrl)
                   }
                 >
-                  获取密钥
+                  {t('providers.key.get')}
                   <ExternalLink aria-hidden="true" size={12} />
                 </a>
               ) : null}
@@ -1624,13 +1685,13 @@ export function ProviderPage({
                   type={showSecret ? 'text' : 'password'}
                   autoComplete="off"
                   spellCheck="false"
-                  aria-label="API Key"
+                  aria-label={t('providers.key.aria')}
                   aria-describedby={
                     credentialFeedback ? 'credential-feedback' : undefined
                   }
                   disabled={pendingAction !== null || credentialLoading}
                   value={apiKey}
-                  placeholder="输入 API Key"
+                  placeholder={t('providers.key.placeholder')}
                   onChange={(event) => {
                     const value = event.target.value;
                     setCredential((current) =>
@@ -1648,7 +1709,11 @@ export function ProviderPage({
                 <button
                   className="provider-secret-visibility"
                   type="button"
-                  aria-label={showSecret ? '隐藏 API Key' : '显示 API Key'}
+                  aria-label={
+                    showSecret
+                      ? t('providers.key.hide')
+                      : t('providers.key.show')
+                  }
                   disabled={
                     pendingAction !== null || credentialLoading || !apiKey
                   }
@@ -1665,8 +1730,8 @@ export function ProviderPage({
                   type="button"
                   aria-label={
                     pendingAction === 'probe'
-                      ? '正在检测 API Key'
-                      : '检测 API Key'
+                      ? t('providers.key.probingAria')
+                      : t('providers.key.probeAria')
                   }
                   disabled={
                     pendingAction !== null ||
@@ -1685,7 +1750,9 @@ export function ProviderPage({
                   ) : (
                     <Activity aria-hidden="true" size={14} />
                   )}
-                  {pendingAction === 'probe' ? '检测中' : '检测'}
+                  {pendingAction === 'probe'
+                    ? t('providers.key.probing')
+                    : t('providers.key.probe')}
                 </button>
               </div>
             </div>
@@ -1714,14 +1781,20 @@ export function ProviderPage({
           >
             <div className="provider-section-heading provider-model-heading">
               <div>
-                <h3 id="provider-models-title">模型</h3>
+                <h3 id="provider-models-title">
+                  {t('providers.models.title')}
+                </h3>
                 <span>
-                  {models.length} 个可见，{effectiveEnabledModelIds.length}{' '}
-                  个已启用
+                  {t('providers.models.summary', {
+                    visible: models.length,
+                    enabled: effectiveEnabledModelIds.length,
+                  })}
                   {!configured && models.length > 0
-                    ? ' · 验证后默认全部启用'
+                    ? t('providers.models.firstSaveSuffix')
                     : ''}
-                  {!supportsModelSync ? ' · 内置模型目录，无需同步' : ''}
+                  {!supportsModelSync
+                    ? t('providers.models.catalogSuffix')
+                    : ''}
                 </span>
               </div>
               <div className="provider-model-actions">
@@ -1743,7 +1816,7 @@ export function ProviderPage({
                       disabled={pendingAction !== null}
                     >
                       <Plus aria-hidden="true" size={15} />
-                      添加模型
+                      {t('providers.models.add')}
                     </button>
                   </Dialog.Trigger>
                   <Dialog.Portal>
@@ -1754,16 +1827,18 @@ export function ProviderPage({
                     >
                       <header>
                         <div>
-                          <Dialog.Title>手动添加模型</Dialog.Title>
+                          <Dialog.Title>
+                            {t('providers.models.addDialogTitle')}
+                          </Dialog.Title>
                           <Dialog.Description id="manual-model-description">
-                            填写上游 API 请求使用的准确 model ID
+                            {t('providers.models.addDialogDescription')}
                           </Dialog.Description>
                         </div>
                         <Dialog.Close asChild>
                           <button
                             className="icon-button"
                             type="button"
-                            aria-label="关闭添加模型"
+                            aria-label={t('providers.models.closeAddDialog')}
                             disabled={pendingAction !== null}
                           >
                             <X aria-hidden="true" size={17} />
@@ -1779,7 +1854,7 @@ export function ProviderPage({
                         }}
                       >
                         <label>
-                          <span>模型 ID</span>
+                          <span>{t('providers.models.id')}</span>
                           <input
                             autoFocus
                             type="text"
@@ -1788,7 +1863,7 @@ export function ProviderPage({
                             spellCheck="false"
                             disabled={pendingAction !== null}
                             value={manualModelDraft.modelId}
-                            placeholder="例如：org/model-v2"
+                            placeholder={t('providers.models.idPlaceholder')}
                             onChange={(event) =>
                               setManualModelDraft((current) => ({
                                 ...current,
@@ -1798,14 +1873,16 @@ export function ProviderPage({
                           />
                         </label>
                         <label>
-                          <span>显示名称（可选）</span>
+                          <span>{t('providers.models.displayName')}</span>
                           <input
                             type="text"
                             maxLength={120}
                             autoComplete="off"
                             disabled={pendingAction !== null}
                             value={manualModelDraft.displayName}
-                            placeholder="留空时使用模型 ID"
+                            placeholder={t(
+                              'providers.models.displayNamePlaceholder',
+                            )}
                             onChange={(event) =>
                               setManualModelDraft((current) => ({
                                 ...current,
@@ -1827,7 +1904,7 @@ export function ProviderPage({
                               type="button"
                               disabled={pendingAction !== null}
                             >
-                              取消
+                              {t('providers.customDialog.cancel')}
                             </button>
                           </Dialog.Close>
                           <button
@@ -1845,8 +1922,8 @@ export function ProviderPage({
                               <Plus aria-hidden="true" size={15} />
                             )}
                             {pendingAction === 'add_model'
-                              ? '正在添加'
-                              : '添加模型'}
+                              ? t('providers.models.adding')
+                              : t('providers.models.add')}
                           </button>
                         </footer>
                       </form>
@@ -1861,8 +1938,10 @@ export function ProviderPage({
                   title={syncDisabledReason ?? undefined}
                   aria-label={
                     syncDisabledReason
-                      ? `同步模型：${syncDisabledReason}`
-                      : '同步模型'
+                      ? t('providers.models.syncDisabledAria', {
+                          reason: syncDisabledReason,
+                        })
+                      : t('providers.models.sync')
                   }
                   onClick={() => void discoverModels()}
                 >
@@ -1876,8 +1955,8 @@ export function ProviderPage({
                     <RefreshCw aria-hidden="true" size={15} />
                   )}
                   {pendingAction === 'discover' || pendingAction === 'sync'
-                    ? '同步中'
-                    : '同步模型'}
+                    ? t('providers.models.syncing')
+                    : t('providers.models.sync')}
                 </button>
               </div>
             </div>
@@ -1888,8 +1967,8 @@ export function ProviderPage({
                   <AlertCircle aria-hidden="true" size={17} />
                   <span>
                     {supportsModelSync
-                      ? '同步模型，或手动添加模型'
-                      : '手动添加模型'}
+                      ? t('providers.models.emptySyncOrAdd')
+                      : t('providers.models.emptyAdd')}
                   </span>
                 </div>
               ) : null}
@@ -1917,11 +1996,15 @@ export function ProviderPage({
                       <strong>{model.display_name ?? model.id}</strong>
                       <span className="provider-model-id">
                         {model.id}
-                        {model.source === 'manual' ? <em>手动</em> : null}
-                        {!available ? <em>当前未返回</em> : null}
+                        {model.source === 'manual' ? (
+                          <em>{t('providers.models.manual')}</em>
+                        ) : null}
+                        {!available ? (
+                          <em>{t('providers.models.unavailable')}</em>
+                        ) : null}
                         {model.probe_status === 'failed' ? (
                           <em className="provider-model-state--error">
-                            验证失败
+                            {t('providers.models.probeFailed')}
                           </em>
                         ) : null}
                       </span>
@@ -1932,7 +2015,9 @@ export function ProviderPage({
                       disabled={
                         pendingAction !== null || !enabled || !available
                       }
-                      aria-label={`将 ${model.display_name ?? model.id} 设为默认模型`}
+                      aria-label={t('providers.models.makeDefaultAria', {
+                        name: model.display_name ?? model.id,
+                      })}
                       aria-pressed={isDefault}
                       onClick={() => {
                         setCredential((current) =>
@@ -1944,19 +2029,23 @@ export function ProviderPage({
                       }}
                     >
                       <Check aria-hidden="true" size={14} />
-                      {isDefault ? '默认' : '设为默认'}
+                      {isDefault
+                        ? t('providers.models.default')
+                        : t('providers.models.makeDefault')}
                     </button>
                     <span className="model-settings-slot">
                       {configured && enabled && model.enabled === true ? (
                         <button
                           className="model-settings-button"
                           type="button"
-                          aria-label={`设置 ${model.display_name ?? model.id}`}
+                          aria-label={t('providers.models.settingsAria', {
+                            name: model.display_name ?? model.id,
+                          })}
                           disabled={pendingAction !== null}
                           onClick={() => openModelSettings(model)}
                         >
                           <Settings2 aria-hidden="true" size={14} />
-                          设置
+                          {t('providers.models.settings')}
                         </button>
                       ) : null}
                     </span>
@@ -1968,7 +2057,9 @@ export function ProviderPage({
                         pendingAction !== null ||
                         (!available && !enabled)
                       }
-                      aria-label={`启用 ${model.display_name ?? model.id}`}
+                      aria-label={t('providers.models.enableAria', {
+                        name: model.display_name ?? model.id,
+                      })}
                       onCheckedChange={(checked) =>
                         void setModelEnabled(model.id, checked)
                       }
@@ -2007,7 +2098,7 @@ export function ProviderPage({
                   void openProviderExternalPage(event, docsUrl)
                 }
               >
-                API 文档
+                {t('providers.footer.apiDocs')}
                 <ExternalLink aria-hidden="true" size={12} />
               </a>
             ) : null}
@@ -2027,7 +2118,9 @@ export function ProviderPage({
                 ) : (
                   <Trash2 aria-hidden="true" size={14} />
                 )}
-                {confirmingDelete ? '确认移除' : '移除配置'}
+                {confirmingDelete
+                  ? t('providers.footer.confirmRemove')
+                  : t('providers.footer.remove')}
               </button>
             ) : null}
           </span>
@@ -2050,7 +2143,9 @@ export function ProviderPage({
             ) : (
               <Save aria-hidden="true" size={15} />
             )}
-            {pendingAction === 'save' ? '正在保存' : '保存配置'}
+            {pendingAction === 'save'
+              ? t('providers.footer.saving')
+              : t('providers.footer.save')}
           </button>
         </footer>
       </div>
@@ -2077,14 +2172,16 @@ export function ProviderPage({
                     {settingsModel.display_name ?? settingsModel.id}
                   </Dialog.Title>
                   <Dialog.Description id="model-settings-description">
-                    模型运行设置 · {settingsModel.id}
+                    {t('providers.settings.description', {
+                      id: settingsModel.id,
+                    })}
                   </Dialog.Description>
                 </div>
                 <Dialog.Close asChild>
                   <button
                     className="icon-button"
                     type="button"
-                    aria-label="关闭模型设置"
+                    aria-label={t('providers.settings.close')}
                     disabled={pendingAction !== null}
                   >
                     <X aria-hidden="true" size={17} />
@@ -2103,15 +2200,15 @@ export function ProviderPage({
                   modelSettingsDraft.reasoningPolicy !== null ? (
                     <label className="model-settings-field">
                       <span>
-                        <strong>思考模式</strong>
+                        <strong>{t('providers.settings.reasoning')}</strong>
                         <small>
                           {settingsModel.reasoning_policy_override === null
-                            ? '继承模型目录默认值'
-                            : '使用当前模型 override'}
+                            ? t('providers.settings.inheritCatalog')
+                            : t('providers.settings.currentOverride')}
                         </small>
                       </span>
                       <select
-                        aria-label="思考模式"
+                        aria-label={t('providers.settings.reasoning')}
                         disabled={pendingAction !== null}
                         value={modelSettingsDraft.reasoningPolicy}
                         onChange={(event) =>
@@ -2124,7 +2221,7 @@ export function ProviderPage({
                         {settingsModel.supported_reasoning_policies.map(
                           (policy) => (
                             <option key={policy} value={policy}>
-                              {reasoningPolicyLabels[policy] ?? policy}
+                              {reasoningPolicyLabel(policy, t)}
                             </option>
                           ),
                         )}
@@ -2135,11 +2232,11 @@ export function ProviderPage({
                   <div className="model-concurrency-grid">
                     <label className="model-settings-field">
                       <span>
-                        <strong>单任务并发</strong>
+                        <strong>{t('providers.settings.perJob')}</strong>
                         <small>
                           {settingsModel.per_job_concurrency_override === null
-                            ? '继承应用默认值'
-                            : '使用当前模型 override'}
+                            ? t('providers.settings.inheritApp')
+                            : t('providers.settings.currentOverride')}
                         </small>
                       </span>
                       <input
@@ -2148,7 +2245,7 @@ export function ProviderPage({
                         max="32"
                         step="1"
                         inputMode="numeric"
-                        aria-label="单任务并发"
+                        aria-label={t('providers.settings.perJob')}
                         aria-invalid={settingsValidationError !== null}
                         disabled={pendingAction !== null}
                         value={modelSettingsDraft.perJobConcurrency}
@@ -2161,11 +2258,11 @@ export function ProviderPage({
                     </label>
                     <label className="model-settings-field">
                       <span>
-                        <strong>跨任务总并发</strong>
+                        <strong>{t('providers.settings.global')}</strong>
                         <small>
                           {settingsModel.global_concurrency_override === null
-                            ? '继承应用默认值'
-                            : '使用当前模型 override'}
+                            ? t('providers.settings.inheritApp')
+                            : t('providers.settings.currentOverride')}
                         </small>
                       </span>
                       <input
@@ -2174,7 +2271,7 @@ export function ProviderPage({
                         max="32"
                         step="1"
                         inputMode="numeric"
-                        aria-label="跨任务总并发"
+                        aria-label={t('providers.settings.global')}
                         aria-invalid={settingsValidationError !== null}
                         disabled={pendingAction !== null}
                         value={modelSettingsDraft.globalConcurrency}
@@ -2209,7 +2306,7 @@ export function ProviderPage({
                     onClick={() => void restoreModelSettingsDefaults()}
                   >
                     <RotateCcw aria-hidden="true" size={13} />
-                    恢复应用默认
+                    {t('providers.settings.restore')}
                   </button>
                   <span>
                     <Dialog.Close asChild>
@@ -2218,7 +2315,7 @@ export function ProviderPage({
                         type="button"
                         disabled={pendingAction !== null}
                       >
-                        取消
+                        {t('providers.settings.cancel')}
                       </button>
                     </Dialog.Close>
                     <button
@@ -2238,7 +2335,9 @@ export function ProviderPage({
                       ) : (
                         <Check aria-hidden="true" size={14} />
                       )}
-                      {pendingAction === 'settings' ? '保存中' : '保存设置'}
+                      {pendingAction === 'settings'
+                        ? t('providers.settings.saving')
+                        : t('providers.settings.save')}
                     </button>
                   </span>
                 </footer>

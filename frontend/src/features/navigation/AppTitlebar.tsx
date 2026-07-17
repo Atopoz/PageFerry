@@ -4,6 +4,8 @@ import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { Minus, Square, X } from 'lucide-react';
 
+import { useI18n } from '@/i18n/i18n';
+
 import type { DesktopPlatform } from './desktop-platform';
 
 interface AppTitlebarProps {
@@ -31,16 +33,21 @@ export function AppTitlebar({
   platform,
   windowControlsEnabled = platform === 'windows' && isTauri(),
 }: AppTitlebarProps) {
+  const { t } = useI18n();
+
   return (
-    <header className="app-titlebar" aria-label="窗口标题栏">
+    <header className="app-titlebar" aria-label={t('titlebar.label')}>
       <div className="titlebar-drag-surface" data-tauri-drag-region />
 
       {windowControlsEnabled ? (
-        <div className="titlebar-window-controls" aria-label="窗口控制">
+        <div
+          className="titlebar-window-controls"
+          aria-label={t('titlebar.controls')}
+        >
           <button
             className="titlebar-window-button"
             type="button"
-            aria-label="最小化窗口"
+            aria-label={t('titlebar.minimize')}
             onClick={minimizeWindow}
           >
             <Minus aria-hidden="true" size={16} strokeWidth={1.5} />
@@ -48,7 +55,7 @@ export function AppTitlebar({
           <button
             className="titlebar-window-button"
             type="button"
-            aria-label="最大化或还原窗口"
+            aria-label={t('titlebar.maximize')}
             onClick={toggleMaximizeWindow}
           >
             <Square aria-hidden="true" size={11} strokeWidth={1.6} />
@@ -56,7 +63,7 @@ export function AppTitlebar({
           <button
             className="titlebar-window-button titlebar-window-button--close"
             type="button"
-            aria-label="关闭窗口"
+            aria-label={t('titlebar.close')}
             onClick={closeWindow}
           >
             <X aria-hidden="true" size={16} strokeWidth={1.5} />
