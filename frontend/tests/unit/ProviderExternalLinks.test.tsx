@@ -4,7 +4,11 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ProviderPage } from '../../src/features/providers/ProviderPage';
-import type { ModelCatalog, ProviderStatus } from '../../src/lib/api';
+import type {
+  ModelCatalog,
+  ProviderModelStatus,
+  ProviderStatus,
+} from '../../src/lib/api';
 
 const providerCatalog: ModelCatalog = {
   schema_version: 1,
@@ -35,7 +39,23 @@ function renderProviderPage(catalog: ModelCatalog = providerCatalog): void {
       onCreate={async () => {
         throw new Error('本测试不创建 provider。');
       }}
+      onAddModel={async () => ({}) as ProviderModelStatus}
+      onLoadApiKey={async () => 'sk-saved-existing'}
+      onProbe={async (providerId) => ({
+        provider_id: providerId,
+        model_id: 'deepseek-chat',
+        display_name: 'DeepSeek Chat',
+        latency_ms: 40,
+      })}
       onSave={async () => ({}) as ProviderStatus}
+      onProviderActiveChange={async () => ({}) as ProviderStatus}
+      onModelEnabledChange={async () => ({}) as ProviderStatus}
+      onSyncModels={async () => {
+        throw new Error('本测试不同步模型。');
+      }}
+      onSaveModelSettings={async () => {
+        throw new Error('本测试不保存模型设置。');
+      }}
       onDelete={async () => undefined}
     />,
   );

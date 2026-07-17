@@ -3,8 +3,8 @@
 import asyncio
 import json
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
-from time import perf_counter
+from contextlib import nullcontext, suppress
+from time import perf_counter, sleep
 from typing import Any, Literal
 
 import httpx2 as httpx
@@ -25,11 +25,27 @@ from modules.translation.contracts import (
     TranslationBatchResult,
     TranslationUsage,
 )
+from modules.translation.model_runtime import (
+    DEFAULT_GLOBAL_CONCURRENCY,
+    DEFAULT_PER_JOB_CONCURRENCY,
+    MAX_MODEL_CONCURRENCY,
+    ModelConcurrencyRegistry,
+)
 from modules.translation.prompt import TranslationMessages, build_translation_messages
 from modules.translation.quality import should_retry_unchanged_translation
 
 BATCH_MAX_TOKENS = 8192
 DISABLED_THINKING = {"type": "disabled"}
+ENABLED_THINKING = {"type": "enabled"}
+_REASONING_POLICIES = {
+    "provider_default",
+    "off",
+    "on",
+    "low",
+    "medium",
+    "high",
+    "max",
+}
 
 HttpClientFactory = Callable[[], httpx.AsyncClient]
 
@@ -52,6 +68,13 @@ class OpenAICompatibleProvider:
         thinking_disabled: bool = False,
         json_response_format: bool = False,
         max_tokens_field: Literal["max_tokens", "max_completion_tokens"] = "max_tokens",
+        provider_id: str | None = None,
+        reasoning_policy: str | None = None,
+        per_job_concurrency: int = DEFAULT_PER_JOB_CONCURRENCY,
+        global_concurrency: int = DEFAULT_GLOBAL_CONCURRENCY,
+        concurrency_registry: ModelConcurrencyRegistry | None = None,
+        batch_retry_count: int = 1,
+        batch_retry_delay_seconds: float = 0.5,
     ) -> None:
         """配置 endpoint 与可选的可注入 HTTP 边界."""
 
@@ -70,6 +93,34 @@ class OpenAICompatibleProvider:
         self._thinking_disabled = thinking_disabled
         self._json_response_format = json_response_format
         self._max_tokens_field = max_tokens_field
+        self._provider_id = provider_id
+        self._reasoning_policy = _normalize_reasoning_policy(
+            reasoning_policy,
+            thinking_disabled=thinking_disabled,
+        )
+        self._per_job_concurrency = _validate_concurrency(per_job_concurrency)
+        self._global_concurrency = _validate_concurrency(global_concurrency)
+        self._concurrency_registry = concurrency_registry
+        if concurrency_registry is not None and (provider_id is None or not provider_id.strip()):
+            raise ValueError("provider id is required when concurrency registry is configured")
+        if isinstance(batch_retry_count, bool) or not 0 <= batch_retry_count <= 3:
+            raise ValueError("batch retry count must be between 0 and 3")
+        if batch_retry_delay_seconds < 0:
+            raise ValueError("batch retry delay must not be negative")
+        self._batch_retry_count = batch_retry_count
+        self._batch_retry_delay_seconds = batch_retry_delay_seconds
+
+    @property
+    def per_job_concurrency(self) -> int:
+        """返回格式 pipeline 可用于 fan-out 的单任务并发上限。"""
+
+        return self._per_job_concurrency
+
+    @property
+    def global_concurrency(self) -> int:
+        """返回当前模型跨 job 共享的有效并发上限。"""
+
+        return self._global_concurrency
 
     async def discover_models(self) -> ModelDiscoveryResult:
         """请求并校验 provider 的显式 model-list endpoint."""
@@ -175,17 +226,37 @@ class OpenAICompatibleProvider:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            return asyncio.run(
-                self.translate_batch_async(
-                    texts=texts,
-                    source_language=source_language,
-                    target_language=target_language,
-                    format_hint=format_hint,
-                    read_only_context=read_only_context,
-                    repair_candidates=repair_candidates,
+            pass
+        else:
+            raise RuntimeError("translate_batch cannot run inside an active event loop")
+
+        for attempt in range(self._batch_retry_count + 1):
+            try:
+                slot = (
+                    self._concurrency_registry.slot(
+                        (self._provider_id or "", self._model_id),
+                        default_limit=self._global_concurrency,
+                    )
+                    if self._concurrency_registry is not None
+                    else nullcontext()
                 )
-            )
-        raise RuntimeError("translate_batch cannot run inside an active event loop")
+                with slot:
+                    return asyncio.run(
+                        self.translate_batch_async(
+                            texts=texts,
+                            source_language=source_language,
+                            target_language=target_language,
+                            format_hint=format_hint,
+                            read_only_context=read_only_context,
+                            repair_candidates=repair_candidates,
+                        )
+                    )
+            except ProviderRequestError as error:
+                if not error.detail.retryable or attempt >= self._batch_retry_count:
+                    raise
+                # 等待发生在共享 slot 之外; 暂时故障不能占着容量阻塞其他 job。
+                sleep(self._batch_retry_delay_seconds * (2**attempt))
+        raise AssertionError("batch retry loop exited without a result")
 
     async def translate_batch_async(
         self,
@@ -424,11 +495,49 @@ class OpenAICompatibleProvider:
     ) -> None:
         """只为明确支持的 provider 添加非 OpenAI 通用请求字段."""
 
-        if self._thinking_disabled:
-            payload["thinking"] = DISABLED_THINKING
+        payload.update(_reasoning_payload(self._provider_id, self._reasoning_policy))
         if self._json_response_format and batch_json:
             # 只有已用真实 endpoint 确认 JSON mode 的 preset 才发送该字段。
             payload["response_format"] = {"type": "json_object"}
+
+
+def _normalize_reasoning_policy(value: str | None, *, thinking_disabled: bool) -> str:
+    """校验模型设置解析出的统一 reasoning policy。"""
+
+    normalized = value.strip().lower() if isinstance(value, str) else ""
+    if not normalized:
+        normalized = "off" if thinking_disabled else "provider_default"
+    if normalized not in _REASONING_POLICIES:
+        raise ValueError(f"unsupported reasoning policy: {normalized}")
+    return normalized
+
+
+def _reasoning_payload(provider_id: str | None, policy: str) -> dict[str, Any]:
+    """把 catalog 校验后的统一策略映射为各 preset 的请求字段。"""
+
+    if policy == "provider_default":
+        return {}
+    if provider_id in {"deepseek", "kimi", "glm", "mimo"}:
+        if policy == "off":
+            return {"thinking": DISABLED_THINKING}
+        if policy == "on":
+            return {"thinking": ENABLED_THINKING}
+        if policy in {"low", "medium", "high", "max"}:
+            return {
+                "thinking": ENABLED_THINKING,
+                "reasoning_effort": policy,
+            }
+    # custom 与未核验 provider 只能使用 provider_default; catalog/service 会拒绝
+    # 其他组合。这里保持保守, 不向未知 endpoint 注入私有字段。
+    return {}
+
+
+def _validate_concurrency(value: int) -> int:
+    """校验 provider adapter 接收的模型并发配置。"""
+
+    if isinstance(value, bool) or not 1 <= value <= MAX_MODEL_CONCURRENCY:
+        raise ValueError(f"model concurrency must be between 1 and {MAX_MODEL_CONCURRENCY}")
+    return value
 
 
 def _join_endpoint(base_url: str, path: str) -> str:

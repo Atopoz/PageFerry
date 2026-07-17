@@ -6,6 +6,7 @@ from modules.model_catalog.catalog import (
     ProviderDefinition,
     ProviderModelDefinition,
     ProviderModelRequestOptions,
+    ReasoningPolicy,
     ThinkingOptions,
     load_bundled_catalog,
 )
@@ -16,6 +17,7 @@ __all__ = [
     "ProviderDefinition",
     "ProviderModelDefinition",
     "ProviderModelRequestOptions",
+    "ReasoningPolicy",
     "ThinkingOptions",
     "load_bundled_catalog",
 ]

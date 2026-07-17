@@ -6,6 +6,16 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+type ReasoningPolicy = Literal[
+    "provider_default",
+    "off",
+    "on",
+    "low",
+    "medium",
+    "high",
+    "max",
+]
+
 
 class ThinkingOptions(BaseModel):
     """Provider 的 thinking mode 请求选项."""
@@ -69,9 +79,36 @@ class ProviderModelDefinition(BaseModel):
     model_id: str
     upstream_model_id: str
     enabled_by_default: bool = True
+    supported_reasoning_policies: list[ReasoningPolicy] = Field(default_factory=list)
+    default_reasoning_policy: ReasoningPolicy | None = None
     default_request_options: ProviderModelRequestOptions = Field(
         default_factory=ProviderModelRequestOptions
     )
+
+    @model_validator(mode="after")
+    def validate_reasoning_contract(self) -> Self:
+        """确保 model identity 与 reasoning contract 可被当前 SQLite schema 安全持久化。"""
+
+        if self.model_id != self.upstream_model_id:
+            # 当前 inventory 用 model_id 作为稳定主键. 如果应用升级时才为已同步的
+            # upstream id 引入 alias, 必须先有显式 migration 改写旧行, 不能靠只读
+            # catalog overlay 假装已经迁移。
+            raise ValueError("provider model aliases require an explicit data migration")
+
+        duplicate_policies = _duplicates(self.supported_reasoning_policies)
+        if duplicate_policies:
+            raise ValueError(
+                f"duplicate supported reasoning policies: {', '.join(sorted(duplicate_policies))}"
+            )
+        if not self.supported_reasoning_policies:
+            if self.default_reasoning_policy is not None:
+                raise ValueError("reasoning default requires supported policies")
+            return self
+        if self.default_reasoning_policy is None:
+            raise ValueError("supported reasoning policies require a default")
+        if self.default_reasoning_policy not in self.supported_reasoning_policies:
+            raise ValueError("reasoning default must be included in supported policies")
+        return self
 
 
 class ModelCatalog(BaseModel):

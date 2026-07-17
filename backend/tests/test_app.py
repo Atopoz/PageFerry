@@ -153,6 +153,80 @@ def test_startup_creates_local_data_layout_and_database(tmp_path) -> None:
     assert table == ("translation_jobs",)
 
 
+def test_provider_configure_openapi_declares_conflict_and_storage_errors(tmp_path) -> None:
+    """Provider OpenAPI 必须声明各 read/write 路径可返回的结构化错误。"""
+
+    app = create_app(
+        Settings(data_dir=tmp_path),
+        secret_store=NoAccessSecretStore(),
+    )
+
+    paths = app.openapi()["paths"]
+    responses = paths["/api/v1/providers/{provider_id}"]["put"]["responses"]
+
+    assert "409" in responses
+    assert "500" in responses
+    assert "500" in paths["/api/v1/providers"]["get"]["responses"]
+    discovery_responses = paths["/api/v1/providers/{provider_id}/models/discover"]["post"][
+        "responses"
+    ]
+    assert "404" in discovery_responses
+    assert "500" in discovery_responses
+    probe_responses = paths["/api/v1/providers/{provider_id}/probe"]["post"]["responses"]
+    assert probe_responses["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/ProviderProbeResponse"
+    }
+    assert {"400", "401", "404", "429", "500", "502", "503"}.issubset(probe_responses)
+
+
+def test_provider_protected_openapi_declares_actual_unauthorized_envelopes(tmp_path) -> None:
+    """401 schema 应区分纯 boot-token 路径与也会返回 service key 错误的路径。"""
+
+    app = create_app(
+        Settings(data_dir=tmp_path),
+        secret_store=NoAccessSecretStore(),
+    )
+
+    paths = app.openapi()["paths"]
+    schemas = app.openapi()["components"]["schemas"]
+    boot_token_schema = {"$ref": "#/components/schemas/BootTokenErrorResponse"}
+    unauthorized_schema = {"$ref": "#/components/schemas/ProviderUnauthorizedResponse"}
+    assert schemas["ProviderUnauthorizedResponse"] == {
+        "anyOf": [
+            boot_token_schema,
+            {"$ref": "#/components/schemas/ProviderErrorResponse"},
+        ]
+    }
+
+    boot_token_only_operations = (
+        paths["/api/v1/providers/custom"]["post"],
+        paths["/api/v1/providers/{provider_id}/api-key"]["get"],
+        paths["/api/v1/providers/{provider_id}/models"]["post"],
+        paths["/api/v1/providers/{provider_id}/active"]["put"],
+        paths["/api/v1/providers/{provider_id}/models/{model_id}/settings"]["put"],
+        paths["/api/v1/providers/{provider_id}"]["delete"],
+    )
+    dual_envelope_operations = (
+        paths["/api/v1/providers/{provider_id}"]["put"],
+        paths["/api/v1/providers/{provider_id}/probe"]["post"],
+        paths["/api/v1/providers/{provider_id}/models/discover"]["post"],
+        paths["/api/v1/providers/{provider_id}/models/sync"]["post"],
+        paths["/api/v1/providers/{provider_id}/models/{model_id}/enabled"]["put"],
+    )
+
+    for operation in boot_token_only_operations:
+        assert operation["responses"]["401"]["content"]["application/json"]["schema"] == (
+            boot_token_schema
+        )
+    for operation in dual_envelope_operations:
+        assert operation["responses"]["401"]["content"]["application/json"]["schema"] == (
+            unauthorized_schema
+        )
+
+    api_key_success = paths["/api/v1/providers/{provider_id}/api-key"]["get"]["responses"]["200"]
+    assert set(api_key_success["headers"]) == {"Cache-Control", "Pragma", "Expires"}
+
+
 def test_startup_without_reconciliation_candidates_never_reads_keychain(tmp_path) -> None:
     """全新或已完成 reconciliation 的数据库启动时不得触发 Keychain。"""
 
@@ -347,7 +421,7 @@ def test_model_catalog_is_versioned_and_contains_bootstrap_providers(tmp_path) -
     assert response.status_code == 200
     catalog = response.json()
     assert catalog["schema_version"] == 1
-    assert catalog["catalog_version"] == "0.1.0-dev"
+    assert catalog["catalog_version"] == "0.2.0-dev"
     assert {provider["id"] for provider in catalog["providers"]} >= {
         "openai",
         "gemini",

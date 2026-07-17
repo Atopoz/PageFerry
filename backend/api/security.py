@@ -5,6 +5,12 @@ from typing import Annotated
 
 from fastapi import Header, HTTPException, Request, status
 
+SENSITIVE_RESPONSE_HEADERS = {
+    "Cache-Control": "no-store, private",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
 
 def require_boot_token(
     request: Request,
@@ -25,4 +31,5 @@ def require_boot_token(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail={"code": "unauthorized", "message": "Invalid boot token."},
+            headers=dict(SENSITIVE_RESPONSE_HEADERS),
         )

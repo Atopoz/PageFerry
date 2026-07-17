@@ -18,6 +18,7 @@ import {
 } from './features/translation/TranslationWorkspace';
 import {
   configureProvider,
+  createProviderModel,
   createCustomProvider,
   createPathJob,
   createUploadJob,
@@ -25,12 +26,24 @@ import {
   getHealth,
   getJobs,
   getModelCatalog,
+  getProviderApiKey,
   getProviderStatuses,
+  probeProvider,
+  setProviderActive,
+  setProviderModelEnabled,
+  syncProviderModels,
+  updateProviderModelSettings,
   type ConfigureProviderInput,
+  type CreateProviderModelInput,
   type CreateCustomProviderInput,
   type ModelCatalog,
+  type ProviderModelStatus,
+  type ProviderModelSync,
+  type ProviderProbeResult,
+  type ProbeProviderInput,
   type ProviderStatus,
   type TranslationJob,
+  type UpdateProviderModelSettingsInput,
 } from './lib/api';
 import './App.css';
 
@@ -60,7 +73,7 @@ function upsertProvider(
  * 在 DELETE 已成功而列表刷新失败时，本地完成同一状态转换。
  *
  * custom provider 从列表移除；preset 则保留入口但清空凭据相关状态，确保翻译页不会
- * 继续提供已经停用的模型。
+ * 继续提供已经移除配置的模型。
  */
 function applyDeletedProvider(
   providers: ProviderStatus[],
@@ -77,6 +90,7 @@ function applyDeletedProvider(
       ? {
           ...provider,
           configured: false,
+          active: false,
           enabled_model_ids: [],
           default_model_id: null,
           model_count: provider.models.length,
@@ -219,6 +233,92 @@ export function App() {
     return next;
   }
 
+  /** 使用当前输入执行一次不持久化的 provider 连接检测。 */
+  function checkProvider(
+    providerId: string,
+    input: ProbeProviderInput,
+  ): Promise<ProviderProbeResult> {
+    return probeProvider(providerId, input);
+  }
+
+  /** 非破坏地切换 provider 是否进入翻译 runtime，并合并后端权威状态。 */
+  async function changeProviderActive(providerId: string, active: boolean) {
+    const next = await setProviderActive(providerId, active);
+    setProviders((current) => upsertProvider(current, next));
+    return next;
+  }
+
+  /** 即时启停模型，并接收后端可能同时调整的默认模型。 */
+  async function changeModelEnabled(
+    providerId: string,
+    modelId: string,
+    enabled: boolean,
+  ) {
+    const next = await setProviderModelEnabled(providerId, modelId, enabled);
+    setProviders((current) => upsertProvider(current, next));
+    return next;
+  }
+
+  /** 幂等同步已配置 provider 的模型 inventory，并直接合并响应中的权威列表。 */
+  async function syncModels(providerId: string): Promise<ProviderModelSync> {
+    const result = await syncProviderModels(providerId);
+    setProviders((current) =>
+      current.map((provider) =>
+        provider.provider_id === providerId
+          ? {
+              ...provider,
+              models: result.models,
+              model_count: result.models.length,
+              last_synced_at: result.last_synced_at,
+            }
+          : provider,
+      ),
+    );
+    return result;
+  }
+
+  /** 登记手动模型并只更新 inventory，不提前把未 probe 模型暴露给翻译页。 */
+  async function addProviderModel(
+    providerId: string,
+    input: CreateProviderModelInput,
+  ): Promise<ProviderModelStatus> {
+    const next = await createProviderModel(providerId, input);
+    setProviders((current) =>
+      current.map((provider) => {
+        if (provider.provider_id !== providerId) return provider;
+        const models = provider.models.some((model) => model.id === next.id)
+          ? provider.models.map((model) =>
+              model.id === next.id ? next : model,
+            )
+          : [...provider.models, next];
+        return { ...provider, models, model_count: models.length };
+      }),
+    );
+    return next;
+  }
+
+  /** 保存模型 runtime settings，并只替换对应模型，避免刷新整页配置。 */
+  async function saveModelSettings(
+    providerId: string,
+    modelId: string,
+    input: UpdateProviderModelSettingsInput,
+  ): Promise<ProviderModelStatus> {
+    const next = await updateProviderModelSettings(providerId, modelId, input);
+    setProviders((current) =>
+      current.map((provider) =>
+        provider.provider_id === providerId
+          ? {
+              ...provider,
+              models: provider.models.map((model) =>
+                model.id === modelId ? next : model,
+              ),
+            }
+          : provider,
+      ),
+    );
+    return next;
+  }
+
   /** 创建 custom provider，并让翻译页与设置页共享同一份状态。 */
   async function addCustomProvider(input: CreateCustomProviderInput) {
     const next = await createCustomProvider(input);
@@ -245,8 +345,8 @@ export function App() {
 
   const sessionJobIdSet = new Set(sessionJobIds);
   const sessionJobs = jobs.filter((job) => sessionJobIdSet.has(job.id));
-  const configuredProviderCount = providers.filter(
-    (provider) => provider.configured,
+  const activeProviderCount = providers.filter(
+    (provider) => provider.active,
   ).length;
   const serviceLabel = {
     checking: '正在连接',
@@ -265,7 +365,7 @@ export function App() {
       <AppSidebar
         activeRoute={activeRoute}
         collapsed={sidebarCollapsed}
-        configuredProviderCount={configuredProviderCount}
+        activeProviderCount={activeProviderCount}
         serviceState={serviceState}
         serviceLabel={serviceLabel}
         onNavigate={setActiveRoute}
@@ -304,7 +404,14 @@ export function App() {
               catalog={catalog}
               providers={providers}
               onCreate={addCustomProvider}
+              onAddModel={addProviderModel}
+              onLoadApiKey={getProviderApiKey}
+              onProbe={checkProvider}
               onSave={saveProvider}
+              onProviderActiveChange={changeProviderActive}
+              onModelEnabledChange={changeModelEnabled}
+              onSyncModels={syncModels}
+              onSaveModelSettings={saveModelSettings}
               onDelete={removeProvider}
             />
           </div>

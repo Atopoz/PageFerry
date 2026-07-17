@@ -14,6 +14,11 @@ from docx import Document
 from docx.document import Document as DocumentType
 from lxml import etree
 
+from modules.translation.batch_fanout import (
+    BatchFanoutOutcome,
+    run_batch_fanout,
+    translator_per_job_concurrency,
+)
 from modules.translation.contracts import (
     BatchTranslator,
     TranslationBatchResult,
@@ -52,6 +57,16 @@ class _TranslationStats:
     translated_segments: int = 0
     fallback_segments: int = 0
     warning_codes: set[str] = field(default_factory=set)
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupTranslation:
+    """保存一个 DOCX group 已通过 repair/fallback 收敛的安全结果。"""
+
+    items: tuple[tuple[Any, str], ...]
+    translated_segments: int
+    fallback_segments: int
+    warning_codes: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,58 +218,43 @@ class DocxPipeline:
         total_segments: int,
         report_progress: TranslationProgressReporter | None,
     ) -> None:
-        """按 500-800 token 分批翻译, 并为每个 segment 留下安全结果。"""
+        """按 500-800 token 分组并有界并发, 为每个 segment 留下安全结果。"""
 
-        for group in _translation_groups(segments):
-            result: TranslationBatchResult | None
-            try:
-                result = self._translator.translate_batch(
-                    texts=[segment.translation_text for segment in group],
-                    source_language=source_language,
-                    target_language=target_language,
-                    format_hint=format_hint,
+        groups = _translation_groups(segments)
+
+        def translate_group(
+            group: tuple[DocxSegment | TableRowSegment, ...],
+        ) -> _GroupTranslation:
+            """让一个 worker 完成首轮、repair 与 fallback 的完整收敛。"""
+
+            return self._translate_group(
+                group,
+                format_hint=format_hint,
+                fallback_warning=fallback_warning,
+                source_language=source_language,
+                target_language=target_language,
+            )
+
+        def commit_group(
+            _group_index: int,
+            group: tuple[DocxSegment | TableRowSegment, ...],
+            outcome: BatchFanoutOutcome[_GroupTranslation],
+        ) -> None:
+            """按原 group 顺序写回已收敛结果, 再推进真实完成进度。"""
+
+            group_result = outcome.value
+            if group_result is None:
+                # worker 之外的异常仍只影响自己的 group, 其他并发结果继续提交。
+                group_result = _GroupTranslation(
+                    items=tuple((segment.key, segment.marked_text) for segment in group),
+                    translated_segments=0,
+                    fallback_segments=len(group),
+                    warning_codes=(fallback_warning,),
                 )
-            except Exception:
-                result = None
-            candidates = _index_batch_result(result, len(group))
-            for index, segment in enumerate(group):
-                initial_candidate = candidates.get(index)
-                translated = self._accept_strict_candidate(segment, initial_candidate)
-                repair_warning: str | None = None
-                if translated is None and initial_candidate and initial_candidate.strip():
-                    # 只有 provider 确实返回了非空坏结果才 repair; batch 异常或缺项直接
-                    # fallback, 避免一次故障膨胀成每个 segment 一次额外 API 请求。
-                    translated, repair_warning = self._repair_once(
-                        segment,
-                        initial_candidate=initial_candidate,
-                        format_hint=format_hint,
-                        source_language=source_language,
-                        target_language=target_language,
-                    )
-                if translated is None:
-                    # 写错 run 比保留原文更危险; 最终边界只能回退完整源骨架。
-                    translated = segment.marked_text
-                    stats.fallback_segments += 1
-                    stats.warning_codes.add(fallback_warning)
-                else:
-                    if is_english_language(target_language):
-                        # 成功译文写回前补齐跨 run 的 English 词间空格; 表格 cell
-                        # 是独立文本槽, 不能跨 cell 补。
-                        blocked_boundaries = (
-                            segment.cell_span_boundaries
-                            if isinstance(segment, TableRowSegment)
-                            else frozenset()
-                        )
-                        translated = normalize_english_span_spacing(
-                            translated,
-                            blocked_boundaries=blocked_boundaries,
-                        )
-                    stats.translated_segments += 1
-                    if repair_warning is not None:
-                        stats.warning_codes.add(repair_warning)
-                translations[segment.key] = translated
-            # 一次 provider batch 及其 repair/fallback 全部结束后再推进, 保证
-            # processed_segments 只包含已经得到最终安全结果的 segment。
+            translations.update(group_result.items)
+            stats.translated_segments += group_result.translated_segments
+            stats.fallback_segments += group_result.fallback_segments
+            stats.warning_codes.update(group_result.warning_codes)
             stats.processed_segments += len(group)
             if report_progress is not None:
                 report_progress(
@@ -264,6 +264,82 @@ class DocxPipeline:
                         total_segments=total_segments,
                     )
                 )
+
+        run_batch_fanout(
+            groups,
+            translate_group,
+            max_concurrency=translator_per_job_concurrency(self._translator),
+            on_group_settled=commit_group,
+        )
+
+    def _translate_group(
+        self,
+        group: Sequence[DocxSegment | TableRowSegment],
+        *,
+        format_hint: str,
+        fallback_warning: str,
+        source_language: str | None,
+        target_language: str,
+    ) -> _GroupTranslation:
+        """完成一个 DOCX group 的 provider 调用、repair 与安全 fallback。"""
+
+        result: TranslationBatchResult | None
+        try:
+            result = self._translator.translate_batch(
+                texts=[segment.translation_text for segment in group],
+                source_language=source_language,
+                target_language=target_language,
+                format_hint=format_hint,
+            )
+        except Exception:
+            result = None
+        candidates = _index_batch_result(result, len(group))
+        items: list[tuple[Any, str]] = []
+        translated_segments = 0
+        fallback_segments = 0
+        warning_codes: set[str] = set()
+        for index, segment in enumerate(group):
+            initial_candidate = candidates.get(index)
+            translated = self._accept_strict_candidate(segment, initial_candidate)
+            repair_warning: str | None = None
+            if translated is None and initial_candidate and initial_candidate.strip():
+                # 只有 provider 确实返回了非空坏结果才 repair; batch 异常或缺项直接
+                # fallback, 避免一次故障膨胀成每个 segment 一次额外 API 请求。
+                translated, repair_warning = self._repair_once(
+                    segment,
+                    initial_candidate=initial_candidate,
+                    format_hint=format_hint,
+                    source_language=source_language,
+                    target_language=target_language,
+                )
+            if translated is None:
+                # 写错 run 比保留原文更危险; 最终边界只能回退完整源骨架。
+                translated = segment.marked_text
+                fallback_segments += 1
+                warning_codes.add(fallback_warning)
+            else:
+                if is_english_language(target_language):
+                    # 成功译文写回前补齐跨 run 的 English 词间空格; 表格 cell
+                    # 是独立文本槽, 不能跨 cell 补。
+                    blocked_boundaries = (
+                        segment.cell_span_boundaries
+                        if isinstance(segment, TableRowSegment)
+                        else frozenset()
+                    )
+                    translated = normalize_english_span_spacing(
+                        translated,
+                        blocked_boundaries=blocked_boundaries,
+                    )
+                translated_segments += 1
+                if repair_warning is not None:
+                    warning_codes.add(repair_warning)
+            items.append((segment.key, translated))
+        return _GroupTranslation(
+            items=tuple(items),
+            translated_segments=translated_segments,
+            fallback_segments=fallback_segments,
+            warning_codes=tuple(sorted(warning_codes)),
+        )
 
     def _repair_once(
         self,

@@ -16,6 +16,7 @@ class ProviderConfigRecord:
     """持久化在 SQLite 中且不含凭据内容的 provider metadata."""
 
     provider_id: str
+    active: bool
     model_id: str | None
     default_model_id: str | None
     base_url: str | None
@@ -47,6 +48,9 @@ class ProviderModelRecord:
     latency_ms: int | None
     last_seen_at: str | None
     last_probed_at: str | None
+    reasoning_policy_override: str | None
+    per_job_concurrency_override: int | None
+    global_concurrency_override: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +61,18 @@ class ProviderInventoryItem:
     upstream_model_id: str
     display_name: str
     source: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderInventoryMergeResult:
+    """一次 inventory merge 的增量统计与 transaction snapshot。"""
+
+    added: int
+    restored: int
+    unavailable: int
+    unchanged: int
+    synced_at: str
+    models: tuple[ProviderModelRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +328,499 @@ class SQLiteProviderConfigRepository:
             raise ProviderConfigRepositoryError("Could not read the provider model.") from None
         return _model_record_from_row(row) if row is not None else None
 
+    def set_active(
+        self,
+        *,
+        provider_id: str,
+        active: bool,
+        updated_at: str,
+    ) -> ProviderConfigRecord | None:
+        """切换 provider active 状态, 并返回同一 transaction snapshot。"""
+
+        try:
+            with self._connection() as connection, connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE provider_configs
+                    SET active = ?, updated_at = ?
+                    WHERE provider_id = ?
+                    """,
+                    (int(active), updated_at, provider_id),
+                )
+                row = (
+                    connection.execute(
+                        f"SELECT {_RECORD_COLUMNS} FROM provider_configs WHERE provider_id = ?",
+                        (provider_id,),
+                    ).fetchone()
+                    if cursor.rowcount == 1
+                    else None
+                )
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError(
+                "Could not update the provider active state."
+            ) from None
+        return _record_from_row(row) if row is not None else None
+
+    def enable_model_after_probe(
+        self,
+        *,
+        provider_id: str,
+        model_id: str,
+        latency_ms: int,
+        probed_at: str,
+        materialize_model: ProviderInventoryItem | None = None,
+    ) -> tuple[ProviderConfigRecord, tuple[ProviderModelRecord, ...]] | None:
+        """在 probe 成功后启用 model, 必要时原子落库 catalog-only item。"""
+
+        try:
+            with self._connection() as connection, connection:
+                if materialize_model is None:
+                    model_cursor = connection.execute(
+                        """
+                        UPDATE provider_model_configs
+                        SET enabled = 1,
+                            probe_status = 'succeeded',
+                            probe_error_code = NULL,
+                            latency_ms = ?,
+                            last_probed_at = ?,
+                            updated_at = ?
+                        WHERE provider_id = ? AND model_id = ?
+                        """,
+                        (latency_ms, probed_at, probed_at, provider_id, model_id),
+                    )
+                else:
+                    if (
+                        materialize_model.model_id != model_id
+                        or materialize_model.source != "catalog"
+                    ):
+                        raise ProviderConfigRepositoryError(
+                            "Only the requested catalog model can be materialized."
+                        )
+                    model_cursor = connection.execute(
+                        """
+                        INSERT INTO provider_model_configs (
+                            provider_id, model_id, upstream_model_id, display_name,
+                            source, enabled, available, probe_status, probe_error_code,
+                            latency_ms, last_seen_at, last_probed_at, created_at, updated_at
+                        )
+                        VALUES (?, ?, ?, ?, 'catalog', 1, 1, 'succeeded', NULL,
+                                ?, NULL, ?, ?, ?)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (
+                            provider_id,
+                            model_id,
+                            materialize_model.upstream_model_id,
+                            materialize_model.display_name,
+                            latency_ms,
+                            probed_at,
+                            probed_at,
+                            probed_at,
+                        ),
+                    )
+                if model_cursor.rowcount != 1:
+                    return None
+                config_cursor = connection.execute(
+                    """
+                    UPDATE provider_configs
+                    SET latency_ms = CASE
+                            WHEN coalesce(default_model_id, model_id) = ? THEN ?
+                            ELSE latency_ms
+                        END,
+                        last_probed_at = ?,
+                        updated_at = ?
+                    WHERE provider_id = ?
+                    """,
+                    (model_id, latency_ms, probed_at, probed_at, provider_id),
+                )
+                if config_cursor.rowcount != 1:
+                    raise ProviderConfigRepositoryError(
+                        "The provider must be configured before enabling a model."
+                    )
+                record_row = connection.execute(
+                    f"SELECT {_RECORD_COLUMNS} FROM provider_configs WHERE provider_id = ?",
+                    (provider_id,),
+                ).fetchone()
+                model_rows = connection.execute(
+                    f"""
+                    SELECT {_MODEL_COLUMNS}
+                    FROM provider_model_configs
+                    WHERE provider_id = ?
+                    ORDER BY enabled DESC, model_id
+                    """,
+                    (provider_id,),
+                ).fetchall()
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError("Could not enable the provider model.") from None
+        if record_row is None:
+            raise ProviderConfigRepositoryError("The provider configuration was not found.")
+        return (
+            _record_from_row(record_row),
+            tuple(_model_record_from_row(row) for row in model_rows),
+        )
+
+    def disable_model(
+        self,
+        *,
+        provider_id: str,
+        model_id: str,
+        replacement_default_model_id: str | None,
+        replacement_latency_ms: int | None,
+        updated_at: str,
+    ) -> tuple[ProviderConfigRecord, tuple[ProviderModelRecord, ...]] | None:
+        """关闭一个 model, 必要时在同一 transaction 切换 default。"""
+
+        try:
+            with self._connection() as connection, connection:
+                model_cursor = connection.execute(
+                    """
+                    UPDATE provider_model_configs
+                    SET enabled = 0, updated_at = ?
+                    WHERE provider_id = ? AND model_id = ? AND enabled = 1
+                    """,
+                    (updated_at, provider_id, model_id),
+                )
+                if model_cursor.rowcount != 1:
+                    return None
+                if replacement_default_model_id is None:
+                    config_cursor = connection.execute(
+                        """
+                        UPDATE provider_configs
+                        SET updated_at = ?
+                        WHERE provider_id = ?
+                        """,
+                        (updated_at, provider_id),
+                    )
+                else:
+                    config_cursor = connection.execute(
+                        """
+                        UPDATE provider_configs
+                        SET model_id = ?,
+                            default_model_id = ?,
+                            latency_ms = ?,
+                            updated_at = ?
+                        WHERE provider_id = ?
+                        """,
+                        (
+                            replacement_default_model_id,
+                            replacement_default_model_id,
+                            replacement_latency_ms,
+                            updated_at,
+                            provider_id,
+                        ),
+                    )
+                if config_cursor.rowcount != 1:
+                    raise ProviderConfigRepositoryError(
+                        "The provider must be configured before disabling a model."
+                    )
+                record_row = connection.execute(
+                    f"SELECT {_RECORD_COLUMNS} FROM provider_configs WHERE provider_id = ?",
+                    (provider_id,),
+                ).fetchone()
+                model_rows = connection.execute(
+                    f"""
+                    SELECT {_MODEL_COLUMNS}
+                    FROM provider_model_configs
+                    WHERE provider_id = ?
+                    ORDER BY enabled DESC, model_id
+                    """,
+                    (provider_id,),
+                ).fetchall()
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError("Could not disable the provider model.") from None
+        if record_row is None:
+            raise ProviderConfigRepositoryError("The provider configuration was not found.")
+        return (
+            _record_from_row(record_row),
+            tuple(_model_record_from_row(row) for row in model_rows),
+        )
+
+    def create_manual_model(
+        self,
+        *,
+        provider_id: str,
+        model_id: str,
+        display_name: str,
+        created_at: str,
+    ) -> ProviderModelRecord:
+        """登记一个尚未 probe 的手动 model, 并返回同一 transaction snapshot。"""
+
+        try:
+            with self._connection() as connection, connection:
+                connection.execute(
+                    """
+                    INSERT INTO provider_model_configs (
+                        provider_id, model_id, upstream_model_id, display_name,
+                        source, enabled, available, probe_status, probe_error_code,
+                        latency_ms, last_seen_at, last_probed_at,
+                        reasoning_policy_override,
+                        per_job_concurrency_override,
+                        global_concurrency_override,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, 'manual', 0, 1, 'not_tested', NULL,
+                            NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        provider_id,
+                        model_id,
+                        model_id,
+                        display_name,
+                        created_at,
+                        created_at,
+                    ),
+                )
+                row = connection.execute(
+                    f"""
+                    SELECT {_MODEL_COLUMNS}
+                    FROM provider_model_configs
+                    WHERE provider_id = ? AND model_id = ?
+                    """,
+                    (provider_id, model_id),
+                ).fetchone()
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError("Could not create the provider model.") from None
+        if row is None:
+            raise ProviderConfigRepositoryError("The provider model was not created.")
+        return _model_record_from_row(row)
+
+    def promote_remote_model_to_manual(
+        self,
+        *,
+        provider_id: str,
+        model_id: str,
+        display_name: str,
+        updated_at: str,
+    ) -> ProviderModelRecord | None:
+        """把同 identity 的 remote row 固定为 manual, 并保留 probe 与 runtime 状态。"""
+
+        try:
+            with self._connection() as connection, connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE provider_model_configs
+                    SET display_name = ?,
+                        source = 'manual',
+                        available = 1,
+                        updated_at = ?
+                    WHERE provider_id = ? AND model_id = ? AND source = 'remote'
+                    """,
+                    (display_name, updated_at, provider_id, model_id),
+                )
+                row = (
+                    connection.execute(
+                        f"""
+                        SELECT {_MODEL_COLUMNS}
+                        FROM provider_model_configs
+                        WHERE provider_id = ? AND model_id = ?
+                        """,
+                        (provider_id, model_id),
+                    ).fetchone()
+                    if cursor.rowcount == 1
+                    else None
+                )
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError("Could not promote the provider model.") from None
+        return _model_record_from_row(row) if row is not None else None
+
+    def update_model_runtime_settings(
+        self,
+        *,
+        provider_id: str,
+        model_id: str,
+        reasoning_policy_override: str | None,
+        per_job_concurrency_override: int | None,
+        global_concurrency_override: int | None,
+        updated_at: str,
+    ) -> ProviderModelRecord | None:
+        """只更新已启用 model 的 runtime override, 并返回同一 transaction snapshot。"""
+
+        try:
+            with self._connection() as connection, connection:
+                cursor = connection.execute(
+                    """
+                    UPDATE provider_model_configs
+                    SET reasoning_policy_override = ?,
+                        per_job_concurrency_override = ?,
+                        global_concurrency_override = ?,
+                        updated_at = ?
+                    WHERE provider_id = ? AND model_id = ? AND enabled = 1
+                    """,
+                    (
+                        reasoning_policy_override,
+                        per_job_concurrency_override,
+                        global_concurrency_override,
+                        updated_at,
+                        provider_id,
+                        model_id,
+                    ),
+                )
+                row = (
+                    connection.execute(
+                        f"""
+                        SELECT {_MODEL_COLUMNS}
+                        FROM provider_model_configs
+                        WHERE provider_id = ? AND model_id = ?
+                        """,
+                        (provider_id, model_id),
+                    ).fetchone()
+                    if cursor.rowcount == 1
+                    else None
+                )
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError(
+                "Could not update the provider model settings."
+            ) from None
+        return _model_record_from_row(row) if row is not None else None
+
+    def merge_inventory(
+        self,
+        *,
+        provider_id: str,
+        inventory: Sequence[ProviderInventoryItem],
+        synced_at: str,
+    ) -> ProviderInventoryMergeResult:
+        """原子 merge inventory, 保留 enabled、default、probe 与 runtime override。"""
+
+        added = 0
+        restored = 0
+        unchanged = 0
+        try:
+            with self._connection() as connection, connection:
+                current_rows = connection.execute(
+                    f"""
+                    SELECT {_MODEL_COLUMNS}
+                    FROM provider_model_configs
+                    WHERE provider_id = ?
+                    """,
+                    (provider_id,),
+                ).fetchall()
+                current = tuple(_model_record_from_row(row) for row in current_rows)
+                by_model_id = {model.model_id: model for model in current}
+                by_upstream_id = {model.upstream_model_id: model for model in current}
+                seen_model_ids: set[str] = set()
+
+                for item in inventory:
+                    existing = by_upstream_id.get(item.upstream_model_id)
+                    if existing is None:
+                        existing = by_model_id.get(item.model_id)
+                    if existing is None:
+                        connection.execute(
+                            """
+                            INSERT INTO provider_model_configs (
+                                provider_id, model_id, upstream_model_id, display_name,
+                                source, enabled, available, probe_status, probe_error_code,
+                                latency_ms, last_seen_at, last_probed_at,
+                                reasoning_policy_override,
+                                per_job_concurrency_override,
+                                global_concurrency_override,
+                                created_at, updated_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, 0, 1, 'not_tested', NULL, NULL, ?, NULL,
+                                    NULL, NULL, NULL, ?, ?)
+                            """,
+                            (
+                                provider_id,
+                                item.model_id,
+                                item.upstream_model_id,
+                                item.display_name,
+                                item.source,
+                                synced_at,
+                                synced_at,
+                                synced_at,
+                            ),
+                        )
+                        seen_model_ids.add(item.model_id)
+                        added += 1
+                        continue
+
+                    # upstream identity 优先; catalog 后续补充稳定 model id 时不改旧选择主键。
+                    seen_model_ids.add(existing.model_id)
+                    if existing.available:
+                        unchanged += 1
+                    else:
+                        restored += 1
+                    preserve_manual = existing.source == "manual" and item.source != "catalog"
+                    next_source = existing.source if preserve_manual else item.source
+                    next_display_name = (
+                        existing.display_name if preserve_manual else item.display_name
+                    )
+                    connection.execute(
+                        """
+                        UPDATE provider_model_configs
+                        SET upstream_model_id = ?,
+                            display_name = ?,
+                            source = ?,
+                            available = 1,
+                            last_seen_at = ?,
+                            updated_at = ?
+                        WHERE provider_id = ? AND model_id = ?
+                        """,
+                        (
+                            item.upstream_model_id,
+                            next_display_name,
+                            next_source,
+                            synced_at,
+                            synced_at,
+                            provider_id,
+                            existing.model_id,
+                        ),
+                    )
+
+                newly_unavailable = tuple(
+                    model.model_id
+                    for model in current
+                    if (
+                        model.source == "remote"
+                        and model.available
+                        and model.model_id not in seen_model_ids
+                    )
+                )
+                if newly_unavailable:
+                    placeholders = ", ".join("?" for _ in newly_unavailable)
+                    connection.execute(
+                        f"""
+                        UPDATE provider_model_configs
+                        SET available = 0, updated_at = ?
+                        WHERE provider_id = ? AND model_id IN ({placeholders})
+                        """,
+                        (synced_at, provider_id, *newly_unavailable),
+                    )
+
+                config_cursor = connection.execute(
+                    """
+                    UPDATE provider_configs
+                    SET last_synced_at = ?, updated_at = ?
+                    WHERE provider_id = ?
+                    """,
+                    (synced_at, synced_at, provider_id),
+                )
+                if config_cursor.rowcount != 1:
+                    raise ProviderConfigRepositoryError(
+                        "The provider must be configured before inventory sync."
+                    )
+                model_rows = connection.execute(
+                    f"""
+                    SELECT {_MODEL_COLUMNS}
+                    FROM provider_model_configs
+                    WHERE provider_id = ?
+                    ORDER BY enabled DESC, model_id
+                    """,
+                    (provider_id,),
+                ).fetchall()
+        except sqlite3.Error:
+            raise ProviderConfigRepositoryError(
+                "Could not synchronize the provider inventory."
+            ) from None
+        return ProviderInventoryMergeResult(
+            added=added,
+            restored=restored,
+            unavailable=len(newly_unavailable),
+            unchanged=unchanged,
+            synced_at=synced_at,
+            models=tuple(_model_record_from_row(row) for row in model_rows),
+        )
+
     def save_successful_probe(
         self,
         *,
@@ -511,6 +1020,7 @@ class SQLiteProviderConfigRepository:
 
 _RECORD_COLUMNS = """
 provider_id,
+active,
 model_id,
 default_model_id,
 base_url,
@@ -538,7 +1048,10 @@ probe_status,
 probe_error_code,
 latency_ms,
 last_seen_at,
-last_probed_at
+last_probed_at,
+reasoning_policy_override,
+per_job_concurrency_override,
+global_concurrency_override
 """
 
 _CUSTOM_PROVIDER_COLUMNS = """
@@ -555,6 +1068,7 @@ def _record_from_row(row: sqlite3.Row) -> ProviderConfigRecord:
 
     return ProviderConfigRecord(
         provider_id=row["provider_id"],
+        active=bool(row["active"]),
         model_id=row["model_id"],
         default_model_id=row["default_model_id"] or row["model_id"],
         base_url=row["base_url"],
@@ -587,6 +1101,9 @@ def _model_record_from_row(row: sqlite3.Row) -> ProviderModelRecord:
         latency_ms=row["latency_ms"],
         last_seen_at=row["last_seen_at"],
         last_probed_at=row["last_probed_at"],
+        reasoning_policy_override=row["reasoning_policy_override"],
+        per_job_concurrency_override=row["per_job_concurrency_override"],
+        global_concurrency_override=row["global_concurrency_override"],
     )
 
 
@@ -607,6 +1124,7 @@ __all__ = [
     "ProviderConfigRecord",
     "ProviderConfigRepositoryError",
     "ProviderInventoryItem",
+    "ProviderInventoryMergeResult",
     "ProviderModelRecord",
     "ProviderSecretCandidateRecord",
     "SQLiteProviderConfigRepository",

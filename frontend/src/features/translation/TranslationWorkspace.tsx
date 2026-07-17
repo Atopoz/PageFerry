@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 
 import {
   CompactSelect,
+  type CompactSelectGroup,
   type CompactSelectOption,
 } from '@/components/ui/compact-select';
 import {
@@ -69,6 +70,12 @@ interface ModelChoice {
   providerName: string;
   modelId: string;
   modelName: string;
+}
+
+interface ModelChoiceGroup {
+  providerId: string;
+  providerName: string;
+  choices: ModelChoice[];
 }
 
 const supportedExtensions = new Set<SupportedDocumentKind>([
@@ -139,48 +146,67 @@ function defaultDocumentOptions(
   return null;
 }
 
-/** 把已配置 provider 展开成翻译页可选择的 provider/model 组合。 */
-function modelChoices(
+/** 把可运行的 provider/model 投影成顺序稳定的供应商分组。 */
+function modelChoiceGroups(
   catalog: ModelCatalog | null,
   providers: ProviderStatus[],
-): ModelChoice[] {
+): ModelChoiceGroup[] {
   const catalogModelNames = new Map(
     (catalog?.models ?? []).map((model) => [model.id, model.display_name]),
   );
   return providers.flatMap((provider) => {
     if (
+      provider.active !== true ||
       !provider.available ||
       !provider.configured ||
       provider.probe_status !== 'succeeded'
     ) {
       return [];
     }
-    const runtimeNames = new Map(
-      provider.models.map((model) => [
-        model.id,
-        model.display_name ?? model.id,
-      ]),
+    const enabledModels = provider.enabled_model_ids ?? [];
+    const enabledModelIds = new Set(enabledModels);
+    const runtimeModels = new Map(
+      provider.models.map((model) => [model.id, model]),
     );
     const orderedModelIds = provider.default_model_id
       ? [
           provider.default_model_id,
-          ...provider.enabled_model_ids.filter(
+          ...enabledModels.filter(
             (modelId) => modelId !== provider.default_model_id,
           ),
         ]
-      : provider.enabled_model_ids;
-    return orderedModelIds
-      .filter((modelId) => provider.enabled_model_ids.includes(modelId))
-      .map((modelId) => ({
-        key: `${provider.provider_id}::${modelId}`,
-        providerId: provider.provider_id,
-        providerName: provider.display_name,
-        modelId,
-        modelName:
-          runtimeNames.get(modelId) ??
-          catalogModelNames.get(modelId) ??
+      : enabledModels;
+    const choices = orderedModelIds.flatMap((modelId) => {
+      const model = runtimeModels.get(modelId);
+      if (
+        model === undefined ||
+        !enabledModelIds.has(modelId) ||
+        model.enabled !== true ||
+        model.available !== true ||
+        (model.probe_status ?? provider.probe_status) !== 'succeeded'
+      ) {
+        return [];
+      }
+      return [
+        {
+          key: `${provider.provider_id}::${modelId}`,
+          providerId: provider.provider_id,
+          providerName: provider.display_name,
           modelId,
-      }));
+          modelName:
+            model.display_name ?? catalogModelNames.get(modelId) ?? modelId,
+        },
+      ];
+    });
+    return choices.length === 0
+      ? []
+      : [
+          {
+            providerId: provider.provider_id,
+            providerName: provider.display_name,
+            choices,
+          },
+        ];
   });
 }
 
@@ -312,21 +338,25 @@ export function TranslationWorkspace({
     };
   }, [active]);
 
-  const choices = modelChoices(catalog, providers);
+  const choiceGroups = modelChoiceGroups(catalog, providers);
+  const choices = choiceGroups.flatMap((group) => group.choices);
   const selectedModel =
     choices.find((choice) => choice.key === selectedModelKey) ?? choices[0];
-  const modelOptions: readonly CompactSelectOption[] = choices.map(
-    (choice) => ({
-      value: choice.key,
-      label: choice.modelName,
-      description: choice.providerName,
+  const modelGroups: readonly CompactSelectGroup[] = choiceGroups.map(
+    (group) => ({
+      id: group.providerId,
+      label: group.providerName,
       icon: (
         <ProviderIcon
-          providerId={choice.providerId}
-          displayName={choice.providerName}
+          providerId={group.providerId}
+          displayName={group.providerName}
           size={20}
         />
       ),
+      options: group.choices.map((choice) => ({
+        value: choice.key,
+        label: choice.modelName,
+      })),
     }),
   );
 
@@ -473,7 +503,7 @@ export function TranslationWorkspace({
               ariaLabel="翻译模型"
               className="model-select-trigger"
               value={selectedModel.key}
-              options={modelOptions}
+              groups={modelGroups}
               leadingIcon={
                 <ProviderIcon
                   providerId={selectedModel.providerId}

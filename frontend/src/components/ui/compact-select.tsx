@@ -11,10 +11,18 @@ export interface CompactSelectOption {
   description?: string;
 }
 
+export interface CompactSelectGroup {
+  id: string;
+  label: string;
+  icon?: ReactNode;
+  options: readonly CompactSelectOption[];
+}
+
 interface CompactSelectProps {
   ariaLabel: string;
   value: string;
-  options: readonly CompactSelectOption[];
+  options?: readonly CompactSelectOption[];
+  groups?: readonly CompactSelectGroup[];
   onValueChange: (value: string) => void;
   className?: string;
   disabled?: boolean;
@@ -22,11 +30,36 @@ interface CompactSelectProps {
   placeholder?: string;
 }
 
+/** 渲染一个可选项，group 与非 group 模式共用同一视觉和键盘行为。 */
+function compactSelectItem(option: CompactSelectOption) {
+  return (
+    <Select.Item
+      className="compact-select-item"
+      key={option.value}
+      value={option.value}
+    >
+      {option.icon ? (
+        <span className="compact-select-item-icon" aria-hidden="true">
+          {option.icon}
+        </span>
+      ) : null}
+      <span className="compact-select-item-copy">
+        <Select.ItemText>{option.label}</Select.ItemText>
+        {option.description ? <small>{option.description}</small> : null}
+      </span>
+      <Select.ItemIndicator className="compact-select-check">
+        <Check aria-hidden="true" size={14} strokeWidth={2.2} />
+      </Select.ItemIndicator>
+    </Select.Item>
+  );
+}
+
 /** 渲染键盘可访问、弹层风格与 trigger 一致的选择控件。 */
 export function CompactSelect({
   ariaLabel,
   value,
-  options,
+  options = [],
+  groups = [],
   onValueChange,
   className = '',
   disabled = false,
@@ -104,25 +137,26 @@ export function CompactSelect({
             <ChevronUp aria-hidden="true" size={14} />
           </Select.ScrollUpButton>
           <Select.Viewport className="compact-select-viewport">
-            {options.map((option) => (
-              <Select.Item
-                className="compact-select-item"
-                key={option.value}
-                value={option.value}
-              >
-                <span className="compact-select-item-icon" aria-hidden="true">
-                  {option.icon}
-                </span>
-                <span className="compact-select-item-copy">
-                  <Select.ItemText>{option.label}</Select.ItemText>
-                  {option.description ? (
-                    <small>{option.description}</small>
+            {options.map(compactSelectItem)}
+            {groups.map((group) => (
+              <Select.Group key={group.id}>
+                <Select.Label className="compact-select-item compact-select-group-label">
+                  {group.icon ? (
+                    <span
+                      className="compact-select-item-icon"
+                      aria-hidden="true"
+                    >
+                      {group.icon}
+                    </span>
                   ) : null}
-                </span>
-                <Select.ItemIndicator className="compact-select-check">
-                  <Check aria-hidden="true" size={14} strokeWidth={2.2} />
-                </Select.ItemIndicator>
-              </Select.Item>
+                  <span className="compact-select-item-copy">
+                    <span>
+                      <strong>{group.label}</strong>
+                    </span>
+                  </span>
+                </Select.Label>
+                {group.options.map(compactSelectItem)}
+              </Select.Group>
             ))}
           </Select.Viewport>
           <Select.ScrollDownButton className="compact-select-scroll">

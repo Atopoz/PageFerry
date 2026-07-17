@@ -14,6 +14,7 @@ from modules.model_catalog.providers import (
     ProviderTranslationRequest,
 )
 from modules.model_catalog.providers import openai_compatible as openai_compatible_module
+from modules.translation.model_runtime import ModelConcurrencyRegistry
 
 TEST_API_KEY = "sensitive-test-key"
 
@@ -201,6 +202,102 @@ def test_probe_runs_minimal_inference_with_thinking_disabled() -> None:
     }
     assert result.model_id == "deepseek-v4-flash"
     assert result.latency_ms >= 0
+
+
+def test_deepseek_reasoning_policy_enables_verified_effort() -> None:
+    """模型设置选择 high 时应同时开启 thinking 并发送 effort。"""
+
+    captured_payload: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """捕获 probe payload 并返回最小 completion。"""
+
+        captured_payload.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {"role": "assistant", "content": "OK"},
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    async def exercise():
+        """以 high reasoning policy 执行 probe。"""
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await DeepSeekProvider(
+                TEST_API_KEY,
+                client=client,
+                reasoning_policy="high",
+            ).probe_model("deepseek-v4-pro")
+
+    asyncio.run(exercise())
+
+    assert captured_payload["thinking"] == {"type": "enabled"}
+    assert captured_payload["reasoning_effort"] == "high"
+
+
+def test_translate_batch_retries_retryable_failure_outside_shared_slot() -> None:
+    """429 可重试一次, 且最终可靠归还跨 job 共享的模型槽。"""
+
+    requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        """首个请求返回 429, 第二个请求返回合法 batch。"""
+
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(429)
+        payload = json.loads(request.content)
+        segments = json.loads(payload["messages"][2]["content"])["segments"]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": json.dumps(
+                                {
+                                    "segments": [
+                                        {"index": segment["index"], "text": "译文"}
+                                        for segment in segments
+                                    ]
+                                }
+                            ),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        )
+
+    registry = ModelConcurrencyRegistry()
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    provider = DeepSeekProvider(
+        TEST_API_KEY,
+        client=client,
+        concurrency_registry=registry,
+        global_concurrency=2,
+        batch_retry_delay_seconds=0,
+    )
+
+    result = provider.translate_batch(
+        texts=["source"],
+        source_language="en",
+        target_language="zh-CN",
+        format_hint="docx",
+    )
+    asyncio.run(client.aclose())
+
+    assert result.items[0].text == "译文"
+    assert requests == 2
+    assert registry.snapshot(("deepseek", "deepseek-v4-flash")).active == 0  # type: ignore[union-attr]
 
 
 def test_translate_keeps_system_and_source_messages_separate() -> None:

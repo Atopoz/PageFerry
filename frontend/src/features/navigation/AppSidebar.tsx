@@ -17,7 +17,7 @@ export type ServiceState = 'checking' | 'connected' | 'offline';
 interface AppSidebarProps {
   activeRoute: AppRoute;
   collapsed: boolean;
-  configuredProviderCount: number;
+  activeProviderCount: number;
   serviceState: ServiceState;
   serviceLabel: string;
   onNavigate: (route: AppRoute) => void;
@@ -34,7 +34,7 @@ const routeItems = [
 export function AppSidebar({
   activeRoute,
   collapsed,
-  configuredProviderCount,
+  activeProviderCount,
   serviceState,
   serviceLabel,
   onNavigate,
@@ -107,10 +107,8 @@ export function AppSidebar({
             >
               <Icon aria-hidden="true" size={18} strokeWidth={1.8} />
               <span>{item.label}</span>
-              {item.route === 'providers' && configuredProviderCount > 0 ? (
-                <small className="sidebar-count">
-                  {configuredProviderCount}
-                </small>
+              {item.route === 'providers' && activeProviderCount > 0 ? (
+                <small className="sidebar-count">{activeProviderCount}</small>
               ) : null}
             </button>
           );

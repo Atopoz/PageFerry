@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "catalog_version": "0.1.0-dev",
+  "catalog_version": "0.2.0-dev",
   "released_at": null,
   "providers": [
     {
@@ -121,14 +121,39 @@
       "capabilities": ["text", "translation", "thinking-toggle"]
     },
     {
+      "id": "deepseek-v4-pro",
+      "display_name": "DeepSeek V4 Pro",
+      "capabilities": ["text", "translation", "thinking-toggle"]
+    },
+    {
+      "id": "kimi-k2.6",
+      "display_name": "Kimi K2.6",
+      "capabilities": ["text", "translation", "thinking-toggle"]
+    },
+    {
       "id": "glm-5.2",
       "display_name": "GLM 5.2",
+      "capabilities": ["text", "translation", "thinking-toggle"]
+    },
+    {
+      "id": "MiniMax-M2.7",
+      "display_name": "MiniMax M2.7",
       "capabilities": ["text", "translation"]
+    },
+    {
+      "id": "MiniMax-M2.7-highspeed",
+      "display_name": "MiniMax M2.7 Highspeed",
+      "capabilities": ["text", "translation"]
+    },
+    {
+      "id": "mimo-v2.5",
+      "display_name": "MiMo V2.5",
+      "capabilities": ["text", "translation", "thinking-toggle"]
     },
     {
       "id": "mimo-v2.5-pro",
       "display_name": "MiMo V2.5 Pro",
-      "capabilities": ["text", "translation"]
+      "capabilities": ["text", "translation", "thinking-toggle"]
     }
   ],
   "provider_models": [
@@ -137,6 +162,34 @@
       "model_id": "deepseek-v4-flash",
       "upstream_model_id": "deepseek-v4-flash",
       "enabled_by_default": true,
+      "supported_reasoning_policies": ["provider_default", "off", "high", "max"],
+      "default_reasoning_policy": "off",
+      "default_request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    },
+    {
+      "provider_id": "deepseek",
+      "model_id": "deepseek-v4-pro",
+      "upstream_model_id": "deepseek-v4-pro",
+      "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default", "off", "high", "max"],
+      "default_reasoning_policy": "off",
+      "default_request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    },
+    {
+      "provider_id": "kimi",
+      "model_id": "kimi-k2.6",
+      "upstream_model_id": "kimi-k2.6",
+      "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default", "off", "on"],
+      "default_reasoning_policy": "off",
       "default_request_options": {
         "thinking": {
           "type": "disabled"
@@ -148,6 +201,35 @@
       "model_id": "glm-5.2",
       "upstream_model_id": "glm-5.2",
       "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default", "off", "high", "max"],
+      "default_reasoning_policy": "provider_default",
+      "default_request_options": {}
+    },
+    {
+      "provider_id": "minimax",
+      "model_id": "MiniMax-M2.7",
+      "upstream_model_id": "MiniMax-M2.7",
+      "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default"],
+      "default_reasoning_policy": "provider_default",
+      "default_request_options": {}
+    },
+    {
+      "provider_id": "minimax",
+      "model_id": "MiniMax-M2.7-highspeed",
+      "upstream_model_id": "MiniMax-M2.7-highspeed",
+      "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default"],
+      "default_reasoning_policy": "provider_default",
+      "default_request_options": {}
+    },
+    {
+      "provider_id": "mimo",
+      "model_id": "mimo-v2.5",
+      "upstream_model_id": "mimo-v2.5",
+      "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default", "off", "on"],
+      "default_reasoning_policy": "provider_default",
       "default_request_options": {}
     },
     {
@@ -155,6 +237,8 @@
       "model_id": "mimo-v2.5-pro",
       "upstream_model_id": "mimo-v2.5-pro",
       "enabled_by_default": false,
+      "supported_reasoning_policies": ["provider_default", "off", "on"],
+      "default_reasoning_policy": "provider_default",
       "default_request_options": {}
     }
   ]

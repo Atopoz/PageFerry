@@ -1,6 +1,7 @@
 """验证 TXT/Markdown runtime 的编码、结构保护与显式 fallback。"""
 
 from collections.abc import Callable, Sequence
+from threading import Barrier, Event, Lock
 
 import pytest
 
@@ -109,6 +110,84 @@ class TransformTranslator:
         )
 
 
+class ConcurrentTranslator:
+    """暴露单 job 上限并阻塞首批请求, 用于证明 pipeline 真实 fan-out。"""
+
+    per_job_concurrency = 2
+
+    def __init__(self) -> None:
+        """初始化首批同步点与活动调用计数。"""
+
+        self._first_wave = Barrier(2, timeout=2)
+        self._lock = Lock()
+        self._call_count = 0
+        self._active = 0
+        self.peak_active = 0
+
+    def translate_batch(
+        self,
+        *,
+        texts: Sequence[str],
+        source_language: str | None,
+        target_language: str,
+        format_hint: str,
+        read_only_context: Sequence[str] = (),
+    ) -> TranslationBatchResult:
+        """让前两批必须重叠执行, 同时返回原顺序的合法结果。"""
+
+        del source_language, target_language, format_hint, read_only_context
+        with self._lock:
+            self._call_count += 1
+            call_number = self._call_count
+            self._active += 1
+            self.peak_active = max(self.peak_active, self._active)
+        try:
+            if call_number <= 2:
+                self._first_wave.wait()
+            return TranslationBatchResult(
+                items=tuple(
+                    TranslationBatchItem(index=index, text=text) for index, text in enumerate(texts)
+                )
+            )
+        finally:
+            with self._lock:
+                self._active -= 1
+
+
+class OutOfOrderFailingTranslator:
+    """让 group 乱序完成并只对其中一组报错。"""
+
+    per_job_concurrency = 3
+
+    def __init__(self) -> None:
+        """建立第三组完成后才释放第一组的同步边界。"""
+
+        self._third_finished = Event()
+
+    def translate_batch(
+        self,
+        *,
+        texts: Sequence[str],
+        source_language: str | None,
+        target_language: str,
+        format_hint: str,
+        read_only_context: Sequence[str] = (),
+    ) -> TranslationBatchResult:
+        """按首字符制造延迟、异常或短译文。"""
+
+        del source_language, target_language, format_hint, read_only_context
+        source = texts[0]
+        if source.startswith("甲"):
+            assert self._third_finished.wait(timeout=2)
+            translated = "FIRST"
+        elif source.startswith("乙"):
+            raise RuntimeError("synthetic middle group failure")
+        else:
+            self._third_finished.set()
+            translated = "THIRD"
+        return TranslationBatchResult(items=(TranslationBatchItem(index=0, text=translated),))
+
+
 def _request(source, output_dir) -> TranslationRequest:
     """创建测试使用的固定翻译请求。"""
 
@@ -163,6 +242,58 @@ def test_txt_pipeline_reports_three_stages_with_real_segment_counts(tmp_path) ->
     assert [update.processed_segments for update in updates if update.stage == "translating"] == [
         0,
         2,
+    ]
+
+
+def test_txt_pipeline_uses_translator_per_job_concurrency_without_reordering(tmp_path) -> None:
+    """多个独立 batch 应按配置并发, 最终写回和 progress 仍保持源顺序。"""
+
+    paragraphs = ("甲" * 700, "乙" * 700, "丙" * 700)
+    source_text = "\n\n".join(paragraphs) + "\n"
+    source = tmp_path / "concurrent.txt"
+    source.write_text(source_text, encoding="utf-8")
+    translator = ConcurrentTranslator()
+    updates: list[TranslationProgress] = []
+
+    result = PlainTextPipeline("txt", translator).translate(
+        _request(source, tmp_path / "outputs"),
+        report_progress=updates.append,
+    )
+
+    assert translator.peak_active == 2
+    assert result.output_path.read_text(encoding="utf-8") == source_text
+    assert result.translated_segments == 3
+    assert result.fallback_segments == 0
+    assert [update.processed_segments for update in updates if update.stage == "translating"] == [
+        0,
+        1,
+        2,
+        3,
+    ]
+
+
+def test_txt_pipeline_isolates_failed_group_after_out_of_order_completion(tmp_path) -> None:
+    """乱序完成不能错写 segment, 中间组异常只应 fallback 自己。"""
+
+    middle = "乙" * 700
+    source = tmp_path / "out-of-order.txt"
+    source.write_text(f"{'甲' * 700}\n\n{middle}\n\n{'丙' * 700}\n", encoding="utf-8")
+    updates: list[TranslationProgress] = []
+
+    result = PlainTextPipeline("txt", OutOfOrderFailingTranslator()).translate(
+        _request(source, tmp_path / "outputs"),
+        report_progress=updates.append,
+    )
+
+    assert result.output_path.read_text(encoding="utf-8") == f"FIRST\n\n{middle}\n\nTHIRD\n"
+    assert result.translated_segments == 2
+    assert result.fallback_segments == 1
+    assert result.warning_codes == ("segment_fallback",)
+    assert [update.processed_segments for update in updates if update.stage == "translating"] == [
+        0,
+        1,
+        2,
+        3,
     ]
 
 

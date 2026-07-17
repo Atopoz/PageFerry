@@ -3,6 +3,7 @@
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +12,11 @@ from modules.plain_text.markdown_table import table_row_signature
 from modules.plain_text.models import TextSegment
 from modules.plain_text.reader import TextFileReader
 from modules.plain_text.segmenter import TextSegmenter
+from modules.translation.batch_fanout import (
+    BatchFanoutOutcome,
+    run_batch_fanout,
+    translator_per_job_concurrency,
+)
 from modules.translation.contracts import (
     BatchTranslator,
     TranslationProgress,
@@ -21,6 +27,14 @@ from modules.translation.contracts import (
 
 PlainTextKind = Literal["txt", "md"]
 _SAFE_LANGUAGE_RE = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupTranslation:
+    """保存一个纯文本 group 已校验并收敛的结果。"""
+
+    items: tuple[tuple[str, str], ...]
+    fallback_segments: int
 
 
 class PlainTextPipeline:
@@ -120,37 +134,63 @@ class PlainTextPipeline:
         read_only_context: tuple[str, ...],
         report_progress: TranslationProgressReporter | None,
     ) -> tuple[dict[str, str], int]:
-        """逐批调用模型, 并把缺 index 或破坏 marker 的结果回退为原文。"""
+        """有界并发调用模型, 并按原 group 顺序提交校验后的结果。"""
 
         translations: dict[str, str] = {}
         fallback_count = 0
         processed_segments = 0
         total_segments = len(segments)
-        for group in self._segmenter.batches(segments):
-            try:
-                result = self._translator.translate_batch(
-                    texts=[segment.source_text for segment in group],
-                    source_language=source_language,
-                    target_language=target_language,
-                    format_hint=self.document_kind,
-                    read_only_context=read_only_context,
-                )
-                indexed = {item.index: item.text for item in result.items}
-                if set(indexed) != set(range(len(group))):
-                    raise ValueError("translation_index_mismatch")
-            except Exception:
-                indexed = {}
+        groups = tuple(tuple(group) for group in self._segmenter.batches(segments))
 
+        def translate_group(group: tuple[TextSegment, ...]) -> _GroupTranslation:
+            """在 worker 内完成 provider 调用、候选校验与逐段 fallback。"""
+
+            result = self._translator.translate_batch(
+                texts=[segment.source_text for segment in group],
+                source_language=source_language,
+                target_language=target_language,
+                format_hint=self.document_kind,
+                read_only_context=read_only_context,
+            )
+            indexed = {item.index: item.text for item in result.items}
+            if set(indexed) != set(range(len(group))):
+                raise ValueError("translation_index_mismatch")
+
+            items: list[tuple[str, str]] = []
+            group_fallbacks = 0
             for index, segment in enumerate(group):
                 translated = indexed.get(index)
                 if translated is None or not self._candidate_is_usable(segment, translated):
-                    translations[segment.segment_id] = segment.source_text
-                    fallback_count += 1
+                    items.append((segment.segment_id, segment.source_text))
+                    group_fallbacks += 1
                     continue
-                translations[segment.segment_id] = self._normalize_line_endings(
-                    translated,
-                    line_ending,
+                items.append(
+                    (
+                        segment.segment_id,
+                        self._normalize_line_endings(translated, line_ending),
+                    )
                 )
+            return _GroupTranslation(
+                items=tuple(items),
+                fallback_segments=group_fallbacks,
+            )
+
+        def commit_group(
+            _group_index: int,
+            group: tuple[TextSegment, ...],
+            outcome: BatchFanoutOutcome[_GroupTranslation],
+        ) -> None:
+            """按输入顺序写回安全结果, 异常只 fallback 当前 group。"""
+
+            nonlocal fallback_count, processed_segments
+            group_result = outcome.value
+            if group_result is None:
+                group_result = _GroupTranslation(
+                    items=tuple((segment.segment_id, segment.source_text) for segment in group),
+                    fallback_segments=len(group),
+                )
+            translations.update(group_result.items)
+            fallback_count += group_result.fallback_segments
             # 一个 batch 的所有候选都已接受或 fallback 后才上报, 避免把尚未落定的
             # provider 返回计入完成数。
             processed_segments += len(group)
@@ -162,6 +202,13 @@ class PlainTextPipeline:
                         total_segments=total_segments,
                     )
                 )
+
+        run_batch_fanout(
+            groups,
+            translate_group,
+            max_concurrency=translator_per_job_concurrency(self._translator),
+            on_group_settled=commit_group,
+        )
         return translations, fallback_count
 
     def _candidate_is_usable(self, segment: TextSegment, translated: str) -> bool:

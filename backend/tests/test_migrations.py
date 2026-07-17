@@ -52,6 +52,15 @@ PUBLISHED_MIGRATION_CHECKSUMS = {
     "0016_rename_job_progress_stages.sql": (
         "1a950b321687f54a539db4fe376d1538262c2f72f7ecf3ee93c4bc2770672690"
     ),
+    "0017_provider_model_runtime_settings.sql": (
+        "2470bc61ec58c271d41ee834f057523bb3c1ac4f953376c40ec08799785b3180"
+    ),
+    "0018_manual_provider_models.sql": (
+        "dfa508f5d235abf993316f4503a0ea94d43447d25ed9a44271aaad09be063ead"
+    ),
+    "0019_provider_active_state.sql": (
+        "9a1a6a55812e63e1c0f32a09df3ee39e4f2c3648482671baaee035b1f328fa25"
+    ),
 }
 
 LEGACY_SCHEMA = """
@@ -159,6 +168,9 @@ def test_migrations_upgrade_legacy_database_without_losing_jobs(tmp_path) -> Non
         ("0014_provider_base_url_overrides.sql",),
         ("0015_job_stage_progress.sql",),
         ("0016_rename_job_progress_stages.sql",),
+        ("0017_provider_model_runtime_settings.sql",),
+        ("0018_manual_provider_models.sql",),
+        ("0019_provider_active_state.sql",),
     ]
 
 
@@ -307,6 +319,191 @@ def test_provider_configs_store_secret_references_without_key_material(tmp_path)
                     '2026-07-16T00:00:00Z'
                 )
                 """
+            )
+
+
+def test_provider_model_runtime_settings_migration_adds_nullable_checked_overrides(
+    tmp_path,
+) -> None:
+    """0017 应为 model 增加可恢复默认的 override, 并拒绝越界持久化。"""
+
+    database = tmp_path / "pageferry.sqlite3"
+    initialize_database(database)
+
+    with sqlite3.connect(database) as connection:
+        columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(provider_model_configs)")
+        }
+        assert {
+            "reasoning_policy_override",
+            "per_job_concurrency_override",
+            "global_concurrency_override",
+        } <= columns
+        connection.execute(
+            """
+            INSERT INTO provider_model_configs (
+                provider_id, model_id, upstream_model_id, display_name,
+                source, enabled, available, probe_status,
+                reasoning_policy_override,
+                per_job_concurrency_override,
+                global_concurrency_override,
+                created_at, updated_at
+            )
+            VALUES (
+                'deepseek', 'deepseek-v4-flash', 'deepseek-v4-flash',
+                'DeepSeek V4 Flash', 'catalog', 1, 1, 'succeeded',
+                'high', 8, 20,
+                '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z'
+            )
+            """
+        )
+        stored = connection.execute(
+            """
+            SELECT reasoning_policy_override,
+                   per_job_concurrency_override,
+                   global_concurrency_override
+            FROM provider_model_configs
+            """
+        ).fetchone()
+        assert stored == ("high", 8, 20)
+
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                UPDATE provider_model_configs
+                SET reasoning_policy_override = 'ultra'
+                """
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                UPDATE provider_model_configs
+                SET global_concurrency_override = 33
+                """
+            )
+
+
+def test_manual_model_source_migration_preserves_existing_runtime_settings(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0018 应新增 manual 来源, 并完整复制 0017 已有的 runtime override。"""
+
+    database = tmp_path / "pageferry.sqlite3"
+    staged_migrations = tmp_path / "migrations"
+    staged_migrations.mkdir()
+    for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        if migration.name >= "0018_manual_provider_models.sql":
+            continue
+        shutil.copy2(migration, staged_migrations / migration.name)
+    monkeypatch.setattr(migration_module, "MIGRATIONS_DIR", staged_migrations)
+    initialize_database(database)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO provider_model_configs (
+                provider_id, model_id, upstream_model_id, display_name,
+                source, enabled, available, probe_status,
+                reasoning_policy_override,
+                per_job_concurrency_override,
+                global_concurrency_override,
+                created_at, updated_at
+            )
+            VALUES (
+                'custom-a1', 'remote-v1', 'remote-v1', 'Remote V1',
+                'remote', 1, 1, 'succeeded', 'medium', 8, 20,
+                '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z'
+            )
+            """
+        )
+
+    monkeypatch.setattr(migration_module, "MIGRATIONS_DIR", MIGRATIONS_DIR)
+    initialize_database(database)
+
+    with sqlite3.connect(database) as connection:
+        preserved = connection.execute(
+            """
+            SELECT source, enabled, available, probe_status,
+                   reasoning_policy_override,
+                   per_job_concurrency_override,
+                   global_concurrency_override
+            FROM provider_model_configs
+            WHERE provider_id = 'custom-a1' AND model_id = 'remote-v1'
+            """
+        ).fetchone()
+        assert preserved == ("remote", 1, 1, "succeeded", "medium", 8, 20)
+        connection.execute(
+            """
+            INSERT INTO provider_model_configs (
+                provider_id, model_id, upstream_model_id, display_name,
+                source, created_at, updated_at
+            )
+            VALUES (
+                'custom-a1', 'manual-v2', 'manual-v2', 'Manual V2',
+                'manual', '2026-07-17T01:00:00Z', '2026-07-17T01:00:00Z'
+            )
+            """
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO provider_model_configs (
+                    provider_id, model_id, upstream_model_id, display_name,
+                    source, created_at, updated_at
+                )
+                VALUES (
+                    'custom-a1', 'invalid-v3', 'invalid-v3', 'Invalid V3',
+                    'local', '2026-07-17T01:00:00Z', '2026-07-17T01:00:00Z'
+                )
+                """
+            )
+
+
+def test_provider_active_state_migration_keeps_existing_configs_active(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """0019 应让旧配置默认保持 active, 并拒绝非法状态。"""
+
+    database = tmp_path / "pageferry.sqlite3"
+    staged_migrations = tmp_path / "migrations"
+    staged_migrations.mkdir()
+    for migration in sorted(MIGRATIONS_DIR.glob("*.sql")):
+        if migration.name >= "0019_provider_active_state.sql":
+            continue
+        shutil.copy2(migration, staged_migrations / migration.name)
+    monkeypatch.setattr(migration_module, "MIGRATIONS_DIR", staged_migrations)
+    initialize_database(database)
+
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO provider_configs (
+                id, provider_id, catalog_version, secret_ref, probe_status,
+                created_at, updated_at
+            )
+            VALUES (
+                'deepseek', 'deepseek', 'legacy', 'keychain:provider/deepseek',
+                'succeeded', '2026-07-17T00:00:00Z', '2026-07-17T00:00:00Z'
+            )
+            """
+        )
+
+    shutil.copy2(
+        MIGRATIONS_DIR / "0019_provider_active_state.sql",
+        staged_migrations / "0019_provider_active_state.sql",
+    )
+    initialize_database(database)
+
+    with sqlite3.connect(database) as connection:
+        assert connection.execute(
+            "SELECT active FROM provider_configs WHERE provider_id = 'deepseek'"
+        ).fetchone() == (1,)
+        connection.execute("UPDATE provider_configs SET active = 0 WHERE provider_id = 'deepseek'")
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE provider_configs SET active = 2 WHERE provider_id = 'deepseek'"
             )
 
 

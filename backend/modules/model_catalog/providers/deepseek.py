@@ -25,6 +25,7 @@ class DeepSeekProvider(OpenAICompatibleProvider):
     ) -> None:
         """保留 DeepSeek 默认值, 并显式关闭 thinking 与启用 JSON mode."""
 
+        kwargs.setdefault("provider_id", "deepseek")
         kwargs.setdefault("thinking_disabled", True)
         kwargs.setdefault("json_response_format", True)
         super().__init__(

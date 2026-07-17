@@ -58,6 +58,7 @@ export interface ProviderStatus {
   deletable: boolean;
   available: boolean;
   configured: boolean;
+  active: boolean;
   supports_model_sync: boolean;
   enabled_model_ids: string[];
   default_model_id: string | null;
@@ -73,8 +74,40 @@ export interface ProviderStatus {
 export interface ConfigureProviderInput {
   api_key?: string;
   base_url?: string | null;
-  enabled_model_ids: string[];
+  enabled_model_ids?: string[];
   default_model_id: string | null;
+  enable_all_models?: boolean;
+}
+
+export interface ProbeProviderInput {
+  api_key?: string;
+  base_url?: string | null;
+  model_id?: string;
+}
+
+export interface ProviderProbeResult {
+  provider_id: string;
+  model_id: string;
+  display_name: string;
+  latency_ms: number;
+}
+
+interface ProviderApiKeyResponse {
+  api_key: string;
+}
+
+export type ReasoningPolicy =
+  'provider_default' | 'off' | 'on' | 'low' | 'medium' | 'high' | 'max';
+
+export interface UpdateProviderModelSettingsInput {
+  reasoning_policy_override?: ReasoningPolicy | null;
+  per_job_concurrency_override?: number | null;
+  global_concurrency_override?: number | null;
+}
+
+export interface CreateProviderModelInput {
+  model_id: string;
+  display_name?: string;
 }
 
 export interface CreateCustomProviderInput {
@@ -85,16 +118,35 @@ export interface CreateCustomProviderInput {
 export interface ProviderModelStatus {
   id: string;
   display_name?: string;
-  source: 'remote' | 'catalog';
-  available?: boolean;
+  source: 'remote' | 'catalog' | 'manual';
+  available: boolean;
   enabled?: boolean;
   probe_status?: ProbeStatus;
+  probe_error_code?: string | null;
   latency_ms?: number | null;
+  last_probed_at?: string | null;
+  reasoning_policy: ReasoningPolicy | null;
+  reasoning_policy_override: ReasoningPolicy | null;
+  supported_reasoning_policies: ReasoningPolicy[];
+  per_job_concurrency: number;
+  per_job_concurrency_override: number | null;
+  global_concurrency: number;
+  global_concurrency_override: number | null;
 }
 
 export interface ProviderModelDiscovery {
   models: ProviderModelStatus[];
   synced_at?: string | null;
+}
+
+export interface ProviderModelSync {
+  provider_id: string;
+  models: ProviderModelStatus[];
+  last_synced_at: string;
+  added: number;
+  restored: number;
+  unavailable: number;
+  unchanged: number;
 }
 
 export type JobStatus =
@@ -138,6 +190,7 @@ export type DocumentTranslationOptions =
 interface RequestOptions {
   method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
   body?: BodyInit;
+  cache?: RequestCache;
   headers?: HeadersInit;
   signal?: AbortSignal;
 }
@@ -214,6 +267,7 @@ function normalizeProviderStatus(
 ): ProviderStatus | null {
   if (!value.provider_id) return null;
   const probeStatus = value.probe_status ?? 'not_tested';
+  const configured = value.configured ?? probeStatus === 'succeeded';
   const isCustom = value.is_custom ?? value.provider_id.startsWith('custom-');
   const defaultModelId = value.default_model_id ?? value.model_id ?? null;
   const enabledModelIds = Array.isArray(value.enabled_model_ids)
@@ -233,7 +287,8 @@ function normalizeProviderStatus(
     base_url_editable: value.base_url_editable ?? false,
     deletable: value.deletable ?? isCustom,
     available: value.available ?? true,
-    configured: value.configured ?? probeStatus === 'succeeded',
+    configured,
+    active: value.active ?? (configured && probeStatus === 'succeeded'),
     supports_model_sync: value.supports_model_sync ?? false,
     enabled_model_ids: enabledModelIds,
     default_model_id: defaultModelId,
@@ -293,6 +348,47 @@ export async function getProviderStatuses(
   });
 }
 
+/** 从系统 Keychain 读取已配置 provider 的原始 API Key，仅在设置页内存中短暂使用。 */
+export async function getProviderApiKey(
+  providerId: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/api-key`,
+    { cache: 'no-store', signal },
+  );
+  const response = unwrapData<ProviderApiKeyResponse>(payload);
+  if (typeof response?.api_key !== 'string' || response.api_key.length === 0) {
+    throw new ApiError('模型服务返回了无效密钥。', 502, 'protocol');
+  }
+  return response.api_key;
+}
+
+/** 使用当前输入执行一次不持久化的最小推理检测。 */
+export async function probeProvider(
+  providerId: string,
+  input: ProbeProviderInput,
+): Promise<ProviderProbeResult> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/probe`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  const response = unwrapData<ProviderProbeResult>(payload);
+  if (
+    typeof response?.provider_id !== 'string' ||
+    typeof response.model_id !== 'string' ||
+    typeof response.display_name !== 'string' ||
+    typeof response.latency_ms !== 'number'
+  ) {
+    throw new ApiError('模型服务返回了无效检测结果。', 502, 'protocol');
+  }
+  return response;
+}
+
 /** 运行真实最小推理检测，成功后保存 provider 配置。 */
 export async function configureProvider(
   providerId: string,
@@ -304,6 +400,28 @@ export async function configureProvider(
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
+    },
+  );
+  const normalized = normalizeProviderStatus(
+    unwrapData<ProviderStatusWire>(payload),
+  );
+  if (normalized === null) {
+    throw new ApiError('模型服务返回了无效状态。', 502, 'protocol');
+  }
+  return normalized;
+}
+
+/** 非破坏地启用或停用 provider；API Key、模型 inventory 与 runtime settings 均保留。 */
+export async function setProviderActive(
+  providerId: string,
+  active: boolean,
+): Promise<ProviderStatus> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/active`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active }),
     },
   );
   const normalized = normalizeProviderStatus(
@@ -329,6 +447,73 @@ export async function discoverProviderModels(
     },
   );
   return unwrapData<ProviderModelDiscovery>(payload);
+}
+
+/** 把远端 inventory 幂等合并进已配置 provider 的持久化模型目录。 */
+export async function syncProviderModels(
+  providerId: string,
+): Promise<ProviderModelSync> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/models/sync`,
+    { method: 'POST' },
+  );
+  return unwrapData<ProviderModelSync>(payload);
+}
+
+/** 登记一个手动填写的上游 model；启用仍由后续 provider 配置完成。 */
+export async function createProviderModel(
+  providerId: string,
+  input: CreateProviderModelInput,
+): Promise<ProviderModelStatus> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/models`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return unwrapData<ProviderModelStatus>(payload);
+}
+
+/** 即时启停一个模型；启用会先做最小推理检测，禁用不会删除模型配置。 */
+export async function setProviderModelEnabled(
+  providerId: string,
+  modelId: string,
+  enabled: boolean,
+): Promise<ProviderStatus> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}/enabled`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    },
+  );
+  const normalized = normalizeProviderStatus(
+    unwrapData<ProviderStatusWire>(payload),
+  );
+  if (normalized === null) {
+    throw new ApiError('模型服务返回了无效状态。', 502, 'protocol');
+  }
+  return normalized;
+}
+
+/** 更新一个已启用模型的 runtime settings；null 表示移除对应 override。 */
+export async function updateProviderModelSettings(
+  providerId: string,
+  modelId: string,
+  input: UpdateProviderModelSettingsInput,
+): Promise<ProviderModelStatus> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${encodeURIComponent(providerId)}/models/${encodeURIComponent(modelId)}/settings`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return unwrapData<ProviderModelStatus>(payload);
 }
 
 /** 删除 provider metadata，并同步删除对应 Keychain secret。 */

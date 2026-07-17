@@ -12,6 +12,11 @@ from typing import Any
 from pptx import Presentation
 from pptx.presentation import Presentation as PresentationType
 
+from modules.translation.batch_fanout import (
+    BatchFanoutOutcome,
+    run_batch_fanout,
+    translator_per_job_concurrency,
+)
 from modules.translation.contracts import (
     BatchTranslator,
     TranslationBatchResult,
@@ -45,6 +50,16 @@ class _TranslationStats:
     translated_segments: int = 0
     fallback_segments: int = 0
     warning_codes: set[str] = field(default_factory=set)
+
+
+@dataclass(frozen=True, slots=True)
+class _GroupTranslation:
+    """保存一个 PPTX group 已通过 repair/fallback 收敛的安全结果。"""
+
+    items: tuple[tuple[PptxSegmentKey, str], ...]
+    translated_segments: int
+    fallback_segments: int
+    warning_codes: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,63 +239,40 @@ class PptxPipeline:
         total_segments: int,
         report_progress: TranslationProgressReporter | None,
     ) -> None:
-        """翻译 slide 内部的 group, 并为每个 segment 保留安全结果."""
+        """有界并发翻译 slide 内 group, 并按原顺序提交安全结果。"""
 
-        for group in _group_segments(segments):
-            try:
-                batch_result = self._translator.translate_batch(
-                    texts=[segment.translation_text for segment in group],
-                    source_language=source_language,
-                    target_language=target_language,
-                    format_hint=format_hint,
-                )
-                candidates = _index_batch_result(batch_result, len(group))
-            except Exception:
-                # 整批 provider 调用失败时没有可修复的译文。直接 fallback, 避免为
-                # group 中每个 segment 再发一次无意义的 repair, 形成 N+1 调用。
-                candidates = {}
+        groups = _group_segments(segments)
 
-            accepted: dict[int, str] = {}
-            malformed: list[tuple[int, PptxSegment, str]] = []
-            for index, segment in enumerate(group):
-                candidate = candidates.get(index)
-                # 缺失或空 candidate 同样没有可修复内容。只有 provider 真正返回了
-                # 非空但结构损坏的文本, 才允许消耗一次 repair 调用。
-                if candidate is not None and candidate.strip():
-                    translated = self._accept_strict_candidate(segment, candidate)
-                    if translated is not None:
-                        accepted[index] = translated
-                    else:
-                        malformed.append((index, segment, candidate))
+        def translate_group(group: tuple[PptxSegment, ...]) -> _GroupTranslation:
+            """让一个 worker 完成首轮、repair 与 fallback 的完整收敛。"""
 
-            # 同一批 malformed 结果一次送入 repair, 而不是为每个 segment 发单独
-            # 请求。这样可避免文档越坏调用数越接近
-            # N+1, 同时仍让缺失 candidate 直接 fallback。
-            accepted.update(
-                self._repair_batch(
-                    malformed,
-                    format_hint=format_hint,
-                    source_language=source_language,
-                    target_language=target_language,
-                )
+            return self._translate_group(
+                group,
+                format_hint=format_hint,
+                fallback_warning=fallback_warning,
+                source_language=source_language,
+                target_language=target_language,
             )
 
-            for index, segment in enumerate(group):
-                translated = accepted.get(index)
-                if translated is None:
-                    # 异常模型响应绝不能把文本错写进其他 run. 原始 marked text 是
-                    # 唯一安全的最终 fallback.
-                    translated = segment.marked_text
-                    stats.fallback_segments += 1
-                    stats.warning_codes.add(fallback_warning)
-                else:
-                    if is_english_language(target_language):
-                        # 分散在相邻视觉 run 的 English 译文常被模型无空格拼接。
-                        # 只在结构校验或 repair 已通过后补空格, 不触碰 marker 骨架。
-                        translated = normalize_english_span_spacing(translated)
-                    stats.translated_segments += 1
-                translations[segment.key] = translated
-            # repair 与 fallback 都已收敛为最终安全结果后, 这一批才能计入完成数。
+        def commit_group(
+            _group_index: int,
+            group: tuple[PptxSegment, ...],
+            outcome: BatchFanoutOutcome[_GroupTranslation],
+        ) -> None:
+            """按原 group 顺序写回结果并在完全收敛后推进 progress。"""
+
+            group_result = outcome.value
+            if group_result is None:
+                group_result = _GroupTranslation(
+                    items=tuple((segment.key, segment.marked_text) for segment in group),
+                    translated_segments=0,
+                    fallback_segments=len(group),
+                    warning_codes=(fallback_warning,),
+                )
+            translations.update(group_result.items)
+            stats.translated_segments += group_result.translated_segments
+            stats.fallback_segments += group_result.fallback_segments
+            stats.warning_codes.update(group_result.warning_codes)
             stats.processed_segments += len(group)
             if report_progress is not None:
                 report_progress(
@@ -290,6 +282,88 @@ class PptxPipeline:
                         total_segments=total_segments,
                     )
                 )
+
+        run_batch_fanout(
+            groups,
+            translate_group,
+            max_concurrency=translator_per_job_concurrency(self._translator),
+            on_group_settled=commit_group,
+        )
+
+    def _translate_group(
+        self,
+        group: Sequence[PptxSegment],
+        *,
+        format_hint: str,
+        fallback_warning: str,
+        source_language: str | None,
+        target_language: str,
+    ) -> _GroupTranslation:
+        """完成一个 PPTX group 的 provider 调用、repair 与安全 fallback。"""
+
+        try:
+            batch_result = self._translator.translate_batch(
+                texts=[segment.translation_text for segment in group],
+                source_language=source_language,
+                target_language=target_language,
+                format_hint=format_hint,
+            )
+            candidates = _index_batch_result(batch_result, len(group))
+        except Exception:
+            # 整批 provider 调用失败时没有可修复的译文。直接 fallback, 避免为
+            # group 中每个 segment 再发一次无意义的 repair, 形成 N+1 调用。
+            candidates = {}
+
+        accepted: dict[int, str] = {}
+        malformed: list[tuple[int, PptxSegment, str]] = []
+        for index, segment in enumerate(group):
+            candidate = candidates.get(index)
+            # 缺失或空 candidate 同样没有可修复内容。只有 provider 真正返回了
+            # 非空但结构损坏的文本, 才允许消耗一次 repair 调用。
+            if candidate is not None and candidate.strip():
+                translated = self._accept_strict_candidate(segment, candidate)
+                if translated is not None:
+                    accepted[index] = translated
+                else:
+                    malformed.append((index, segment, candidate))
+
+        # 同一批 malformed 结果一次送入 repair, 而不是为每个 segment 发单独
+        # 请求。这样可避免文档越坏调用数越接近 N+1, 同时仍让缺失 candidate
+        # 直接 fallback。repair 留在当前 worker 内, 不能绕过单 job 并发上限。
+        accepted.update(
+            self._repair_batch(
+                malformed,
+                format_hint=format_hint,
+                source_language=source_language,
+                target_language=target_language,
+            )
+        )
+
+        items: list[tuple[PptxSegmentKey, str]] = []
+        translated_segments = 0
+        fallback_segments = 0
+        warning_codes: set[str] = set()
+        for index, segment in enumerate(group):
+            translated = accepted.get(index)
+            if translated is None:
+                # 异常模型响应绝不能把文本错写进其他 run. 原始 marked text 是
+                # 唯一安全的最终 fallback.
+                translated = segment.marked_text
+                fallback_segments += 1
+                warning_codes.add(fallback_warning)
+            else:
+                if is_english_language(target_language):
+                    # 分散在相邻视觉 run 的 English 译文常被模型无空格拼接。
+                    # 只在结构校验或 repair 已通过后补空格, 不触碰 marker 骨架。
+                    translated = normalize_english_span_spacing(translated)
+                translated_segments += 1
+            items.append((segment.key, translated))
+        return _GroupTranslation(
+            items=tuple(items),
+            translated_segments=translated_segments,
+            fallback_segments=fallback_segments,
+            warning_codes=tuple(sorted(warning_codes)),
+        )
 
     def _repair_batch(
         self,

@@ -53,6 +53,7 @@ function providerStatus(configured: boolean) {
     display_name: 'DeepSeek',
     available: true,
     configured,
+    active: configured,
     supports_model_sync: true,
     enabled_model_ids: configured ? ['deepseek-v4-flash'] : [],
     default_model_id: configured ? 'deepseek-v4-flash' : null,
@@ -63,6 +64,7 @@ function providerStatus(configured: boolean) {
         display_name: 'DeepSeek V4 Flash',
         source: 'catalog',
         enabled: configured,
+        available: true,
       },
     ],
     probe_status: configured ? 'succeeded' : 'not_configured',
@@ -85,6 +87,7 @@ function customProviderStatus() {
     deletable: true,
     available: true,
     configured: true,
+    active: true,
     supports_model_sync: true,
     enabled_model_ids: ['local-translate'],
     default_model_id: 'local-translate',
@@ -150,6 +153,7 @@ describe('App', () => {
   let statusFactory: () => ReturnType<typeof providerStatus>;
   let providerListFactory: () => unknown[];
   let discoveryModels: ReturnType<typeof providerStatus>['models'];
+  let lastProviderMutation: ReturnType<typeof providerStatus> | null;
   let deleteCompleted: boolean;
   let failProviderRefreshAfterDelete: boolean;
 
@@ -160,18 +164,21 @@ describe('App', () => {
     providerListFactory = () => [statusFactory()];
     deleteCompleted = false;
     failProviderRefreshAfterDelete = false;
+    lastProviderMutation = null;
     discoveryModels = [
       {
         id: 'deepseek-v4-flash',
         display_name: 'DeepSeek V4 Flash',
         source: 'remote',
         enabled: true,
+        available: true,
       },
       {
         id: 'deepseek-chat',
         display_name: 'DeepSeek Chat',
         source: 'remote',
         enabled: false,
+        available: true,
       },
     ];
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
@@ -184,6 +191,12 @@ describe('App', () => {
       }
       if (url.endsWith('/api/v1/model-catalog')) return jsonResponse(catalog);
       if (
+        url.endsWith('/api/v1/providers/deepseek/api-key') &&
+        init?.method === undefined
+      ) {
+        return jsonResponse({ api_key: 'sk-saved-existing' });
+      }
+      if (
         url.endsWith('/api/v1/providers/deepseek/models/discover') &&
         init?.method === 'POST'
       ) {
@@ -192,13 +205,141 @@ describe('App', () => {
         });
       }
       if (
+        url.endsWith('/api/v1/providers/deepseek/probe') &&
+        init?.method === 'POST'
+      ) {
+        const body = JSON.parse(String(init.body)) as { model_id?: string };
+        return jsonResponse({
+          provider_id: 'deepseek',
+          model_id: body.model_id ?? 'deepseek-v4-flash',
+          display_name: 'DeepSeek V4 Flash',
+          latency_ms: 91,
+        });
+      }
+      if (
+        url.endsWith('/api/v1/providers/deepseek/models/sync') &&
+        init?.method === 'POST'
+      ) {
+        const discoveredIds = new Set(discoveryModels.map((model) => model.id));
+        const unavailableSelections = statusFactory()
+          .models.filter(
+            (model) => model.enabled && !discoveredIds.has(model.id),
+          )
+          .map((model) => ({ ...model, available: false }));
+        return jsonResponse({
+          provider_id: 'deepseek',
+          models: [...discoveryModels, ...unavailableSelections],
+          last_synced_at: '2026-07-17T02:00:00Z',
+          added: discoveryModels.length,
+          restored: 0,
+          unavailable: unavailableSelections.length,
+          unchanged: 0,
+        });
+      }
+      if (
+        url.endsWith('/api/v1/providers/deepseek/models') &&
+        init?.method === 'POST'
+      ) {
+        const body = JSON.parse(String(init.body)) as {
+          model_id: string;
+          display_name?: string;
+        };
+        const model = {
+          id: body.model_id,
+          display_name: body.display_name ?? body.model_id,
+          source: 'manual',
+          enabled: false,
+          available: true,
+          reasoning_policy: null,
+          reasoning_policy_override: null,
+          supported_reasoning_policies: [],
+          per_job_concurrency: 6,
+          per_job_concurrency_override: null,
+          global_concurrency: 15,
+          global_concurrency_override: null,
+        } as const;
+        discoveryModels = [...discoveryModels, model];
+        return jsonResponse(model, 201);
+      }
+      if (
+        url.endsWith('/api/v1/providers/deepseek/active') &&
+        init?.method === 'PUT'
+      ) {
+        const body = JSON.parse(String(init.body)) as { active: boolean };
+        lastProviderMutation = {
+          ...(lastProviderMutation ?? statusFactory()),
+          active: body.active,
+        };
+        return jsonResponse(lastProviderMutation);
+      }
+      if (
+        url.includes('/api/v1/providers/deepseek/models/') &&
+        url.endsWith('/enabled') &&
+        init?.method === 'PUT'
+      ) {
+        const body = JSON.parse(String(init.body)) as { enabled: boolean };
+        const encodedModelId = url
+          .split('/models/')[1]
+          ?.replace(/\/enabled$/, '');
+        const modelId = decodeURIComponent(encodedModelId ?? '');
+        const current = lastProviderMutation ?? statusFactory();
+        const knownModel =
+          current.models.find((model) => model.id === modelId) ??
+          discoveryModels.find((model) => model.id === modelId);
+        const models = knownModel
+          ? current.models.some((model) => model.id === modelId)
+            ? current.models.map((model) =>
+                model.id === modelId
+                  ? { ...model, enabled: body.enabled, available: true }
+                  : model,
+              )
+            : [
+                ...current.models,
+                { ...knownModel, enabled: body.enabled, available: true },
+              ]
+          : current.models;
+        const enabledModelIds = body.enabled
+          ? [...new Set([...current.enabled_model_ids, modelId])]
+          : current.enabled_model_ids.filter((id) => id !== modelId);
+        lastProviderMutation = {
+          ...current,
+          enabled_model_ids: enabledModelIds,
+          default_model_id:
+            current.default_model_id === modelId && !body.enabled
+              ? (enabledModelIds[0] ?? null)
+              : current.default_model_id,
+          models,
+        };
+        return jsonResponse(lastProviderMutation);
+      }
+      if (
         url.endsWith('/api/v1/providers/deepseek') &&
         init?.method === 'PUT'
       ) {
-        return jsonResponse({
+        const body = JSON.parse(String(init.body)) as {
+          enable_all_models?: boolean;
+          enabled_model_ids?: string[];
+          default_model_id?: string | null;
+        };
+        const current = lastProviderMutation ?? statusFactory();
+        const enabledModelIds = body.enable_all_models
+          ? discoveryModels
+              .filter((model) => model.available !== false)
+              .map((model) => model.id)
+          : (body.enabled_model_ids ?? current.enabled_model_ids);
+        lastProviderMutation = {
           ...providerStatus(true),
+          active: current.configured ? current.active : true,
+          enabled_model_ids: enabledModelIds,
+          default_model_id: body.default_model_id ?? enabledModelIds[0] ?? null,
+          models: discoveryModels.map((model) => ({
+            ...model,
+            available: model.available !== false,
+            enabled: enabledModelIds.includes(model.id),
+          })),
           latency_ms: 288,
-        });
+        };
+        return jsonResponse(lastProviderMutation);
       }
       if (url.includes('/api/v1/providers/') && init?.method === 'DELETE') {
         deleteCompleted = true;
@@ -241,7 +382,7 @@ describe('App', () => {
       '1',
     );
     expect(screen.queryByText('暂无记录')).not.toBeInTheDocument();
-    expect(globalThis.fetch).toHaveBeenCalledTimes(4);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(5);
   });
 
   it('将历史任务和文件翻译页彻底分开', async () => {
@@ -475,7 +616,7 @@ describe('App', () => {
     expect(formData.has('options')).toBe(false);
   });
 
-  it('在独立模型服务页同步模型并保存启用集合', async () => {
+  it('首次验证时整组启用同步得到的模型', async () => {
     configured = false;
     render(<App />);
     await screen.findByText('v0.1.0');
@@ -490,17 +631,34 @@ describe('App', () => {
     fireEvent.click(screen.getByRole('button', { name: '同步模型' }));
     expect(await screen.findByText('DeepSeek Chat')).toBeInTheDocument();
 
-    fireEvent.click(
+    expect(
       screen.getByRole('switch', { name: '启用 DeepSeek V4 Flash' }),
-    );
+    ).toBeChecked();
     fireEvent.click(
       screen.getByRole('button', {
         name: '将 DeepSeek V4 Flash 设为默认模型',
       }),
     );
-    fireEvent.click(screen.getByRole('button', { name: '验证并保存' }));
+    fireEvent.click(screen.getByRole('button', { name: '检测 API Key' }));
+    expect(
+      await screen.findByText(
+        '检测通过 · DeepSeek V4 Flash · 91 ms，更改尚未保存',
+      ),
+    ).toBeInTheDocument();
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(
+          ([url, options]) =>
+            String(url).endsWith('/api/v1/providers/deepseek') &&
+            options?.method === 'PUT',
+        ),
+    ).toBeUndefined();
 
-    expect(await screen.findByText('连接正常 · 288 ms')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+    expect(
+      await screen.findByText('配置已保存 · 连接延迟 288 ms'),
+    ).toBeInTheDocument();
     const configureCall = vi
       .mocked(globalThis.fetch)
       .mock.calls.find(
@@ -509,9 +667,59 @@ describe('App', () => {
           options?.method === 'PUT',
       );
     expect(JSON.parse(String(configureCall?.[1]?.body))).toEqual({
-      enabled_model_ids: ['deepseek-v4-flash'],
       default_model_id: 'deepseek-v4-flash',
+      enable_all_models: true,
       api_key: 'sk-test-only',
+    });
+  });
+
+  it('已配置供应商的手动模型先保持关闭，再按行验证启用', async () => {
+    render(<App />);
+    await screen.findByText('v0.1.0');
+    fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
+
+    fireEvent.click(screen.getByRole('button', { name: '添加模型' }));
+    const dialog = screen.getByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('模型 ID'), {
+      target: { value: 'org/translate-v2' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('显示名称（可选）'), {
+      target: { value: 'Translate V2' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: '添加模型' }));
+
+    expect(
+      await screen.findByRole('switch', { name: '启用 Translate V2' }),
+    ).not.toBeChecked();
+    const addCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(
+        ([url, options]) =>
+          String(url).endsWith('/api/v1/providers/deepseek/models') &&
+          options?.method === 'POST',
+      );
+    expect(JSON.parse(String(addCall?.[1]?.body))).toEqual({
+      model_id: 'org/translate-v2',
+      display_name: 'Translate V2',
+    });
+
+    fireEvent.click(screen.getByRole('switch', { name: '启用 Translate V2' }));
+    expect(
+      await screen.findByText('Translate V2 已启用。'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('switch', { name: '启用 Translate V2' }),
+    ).toBeChecked();
+    const enabledCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(
+        ([url, options]) =>
+          String(url).endsWith(
+            '/api/v1/providers/deepseek/models/org%2Ftranslate-v2/enabled',
+          ) && options?.method === 'PUT',
+      );
+    expect(JSON.parse(String(enabledCall?.[1]?.body))).toEqual({
+      enabled: true,
     });
   });
 
@@ -531,22 +739,21 @@ describe('App', () => {
     );
   });
 
-  it('同步漏报旧模型时保留 unavailable 行，并允许用户关闭和切换默认模型', async () => {
+  it('同步漏报旧模型时保留 unavailable 行，并即时启停与切换默认模型', async () => {
     discoveryModels = [
       {
         id: 'deepseek-chat',
         display_name: 'DeepSeek Chat',
         source: 'remote',
         enabled: false,
+        available: true,
       },
     ];
     render(<App />);
     await screen.findByText('v0.1.0');
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
     fireEvent.click(screen.getByRole('button', { name: '同步模型' }));
-    expect(
-      await screen.findByText(/现有启用与默认选择保持不变/),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/模型同步完成/)).toBeInTheDocument();
     const modelList = document.querySelector('.provider-model-list');
     expect(modelList).not.toBeNull();
     const unavailableRow = within(modelList as HTMLElement)
@@ -563,32 +770,75 @@ describe('App', () => {
     ).toBeChecked();
 
     fireEvent.click(screen.getByRole('switch', { name: '启用 DeepSeek Chat' }));
+    expect(
+      await screen.findByText('DeepSeek Chat 已启用。'),
+    ).toBeInTheDocument();
     fireEvent.click(
+      screen.getByRole('switch', { name: '启用 DeepSeek V4 Flash' }),
+    );
+    expect(
+      await screen.findByText('DeepSeek V4 Flash 已停用。'),
+    ).toBeInTheDocument();
+    expect(
       screen.getByRole('button', {
         name: '将 DeepSeek Chat 设为默认模型',
       }),
-    );
-    fireEvent.click(
-      within(unavailableRow as HTMLElement).getByRole('switch', {
-        name: '启用 DeepSeek V4 Flash',
-      }),
-    );
-    fireEvent.click(screen.getByRole('button', { name: '验证并保存' }));
+    ).toHaveAttribute('aria-pressed', 'true');
 
-    const configureCall = vi
+    const enabledCalls = vi
       .mocked(globalThis.fetch)
-      .mock.calls.find(
+      .mock.calls.filter(
         ([url, options]) =>
-          String(url).endsWith('/api/v1/providers/deepseek') &&
-          options?.method === 'PUT',
+          String(url).endsWith('/enabled') && options?.method === 'PUT',
       );
-    expect(JSON.parse(String(configureCall?.[1]?.body))).toEqual({
-      enabled_model_ids: ['deepseek-chat'],
-      default_model_id: 'deepseek-chat',
-    });
+    expect(
+      enabledCalls.map(([, options]) => JSON.parse(String(options?.body))),
+    ).toEqual([{ enabled: true }, { enabled: false }]);
   });
 
-  it('preset 删除成功但刷新失败时本地重置，并从翻译模型中移除', async () => {
+  it('供应商开关只改变 active，不走删除并可恢复翻译模型', async () => {
+    render(<App />);
+    await screen.findByText('v0.1.0');
+
+    fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
+    const activeSwitch = screen.getByRole('switch', {
+      name: '启用 DeepSeek 供应商',
+    });
+    fireEvent.click(activeSwitch);
+    expect(await screen.findByText('DeepSeek 已停用。')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'DeepSeek，已停用' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: '文件翻译' }));
+    expect(
+      screen.queryByRole('combobox', { name: '翻译模型' }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
+    fireEvent.click(
+      screen.getByRole('switch', { name: '启用 DeepSeek 供应商' }),
+    );
+    expect(await screen.findByText('DeepSeek 已启用。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '文件翻译' }));
+    expect(
+      screen.getByRole('combobox', { name: '翻译模型' }),
+    ).toHaveTextContent('DeepSeek V4 Flash');
+
+    const activeCalls = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(([url]) => String(url).endsWith('/active'));
+    expect(
+      activeCalls.map(([, options]) => JSON.parse(String(options?.body))),
+    ).toEqual([{ active: false }, { active: true }]);
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.some(([, options]) => options?.method === 'DELETE'),
+    ).toBe(false);
+  });
+
+  it('preset 移除配置成功但刷新失败时本地重置，并从翻译模型中移除', async () => {
     failProviderRefreshAfterDelete = true;
     render(<App />);
     await screen.findByText('v0.1.0');
@@ -597,10 +847,12 @@ describe('App', () => {
     ).toHaveTextContent('DeepSeek V4 Flash');
 
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
-    fireEvent.click(screen.getByRole('button', { name: '停用服务' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认停用' }));
+    fireEvent.click(screen.getByRole('button', { name: '移除配置' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认移除' }));
 
-    expect(await screen.findByText('DeepSeek 已停用。')).toBeInTheDocument();
+    expect(
+      await screen.findByText('DeepSeek 配置已移除。'),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole('button', { name: 'DeepSeek，未配置' }),
     ).toBeInTheDocument();
@@ -623,11 +875,13 @@ describe('App', () => {
     ).toHaveTextContent('内部翻译模型');
 
     fireEvent.click(screen.getByRole('button', { name: /^模型服务/ }));
-    fireEvent.click(screen.getByRole('button', { name: '内部网关，已激活' }));
-    fireEvent.click(screen.getByRole('button', { name: '删除供应商' }));
-    fireEvent.click(screen.getByRole('button', { name: '确认删除' }));
+    fireEvent.click(screen.getByRole('button', { name: '内部网关，已启用' }));
+    fireEvent.click(screen.getByRole('button', { name: '移除配置' }));
+    fireEvent.click(screen.getByRole('button', { name: '确认移除' }));
 
-    expect(await screen.findByText('内部网关 已删除。')).toBeInTheDocument();
+    expect(
+      await screen.findByText('内部网关 配置已移除。'),
+    ).toBeInTheDocument();
     expect(
       screen.queryByRole('button', { name: /内部网关，/ }),
     ).not.toBeInTheDocument();
@@ -652,6 +906,7 @@ describe('App', () => {
           display_name: 'DeepSeek Chat',
           source: 'remote',
           enabled: true,
+          available: true,
         },
       ],
     });

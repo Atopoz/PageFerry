@@ -51,8 +51,50 @@ def test_bundled_catalog_disables_thinking_for_deepseek_v4_flash() -> None:
     assert "translation" in model.capabilities
     assert provider_model.upstream_model_id == "deepseek-v4-flash"
     assert provider_model.enabled_by_default is True
+    assert provider_model.supported_reasoning_policies == [
+        "provider_default",
+        "off",
+        "high",
+        "max",
+    ]
+    assert provider_model.default_reasoning_policy == "off"
     assert provider_model.default_request_options.thinking is not None
     assert provider_model.default_request_options.thinking.type == "disabled"
+
+
+def test_bundled_catalog_declares_reasoning_per_model_without_fake_intensity() -> None:
+    """强度型与 toggle 型 model 应只暴露各自真正支持的 reasoning policy。"""
+
+    catalog = load_bundled_catalog()
+    mappings = {
+        (mapping.provider_id, mapping.model_id): mapping for mapping in catalog.provider_models
+    }
+
+    assert mappings[("deepseek", "deepseek-v4-pro")].supported_reasoning_policies == [
+        "provider_default",
+        "off",
+        "high",
+        "max",
+    ]
+    assert mappings[("glm", "glm-5.2")].supported_reasoning_policies == [
+        "provider_default",
+        "off",
+        "high",
+        "max",
+    ]
+    assert mappings[("kimi", "kimi-k2.6")].supported_reasoning_policies == [
+        "provider_default",
+        "off",
+        "on",
+    ]
+    assert mappings[("mimo", "mimo-v2.5")].supported_reasoning_policies == [
+        "provider_default",
+        "off",
+        "on",
+    ]
+    assert mappings[("minimax", "MiniMax-M2.7")].supported_reasoning_policies == [
+        "provider_default"
+    ]
 
 
 def test_catalog_rejects_duplicate_provider_ids() -> None:
@@ -85,4 +127,31 @@ def test_catalog_rejects_endpoint_path_without_leading_slash() -> None:
     deepseek["chat_path"] = "chat/completions"
 
     with pytest.raises(ValidationError, match="must start with"):
+        ModelCatalog.model_validate(raw_catalog)
+
+
+def test_catalog_rejects_reasoning_default_outside_supported_policies() -> None:
+    """Model reasoning 默认值必须属于同一 mapping 的显式支持集合。"""
+
+    raw_catalog = load_bundled_catalog().model_dump(mode="json")
+    raw_catalog["provider_models"][0]["default_reasoning_policy"] = "medium"
+
+    with pytest.raises(ValidationError, match="must be included"):
+        ModelCatalog.model_validate(raw_catalog)
+
+
+def test_catalog_rejects_model_alias_without_data_migration() -> None:
+    """当前 catalog 不能仅靠映射字段给已持久化的 upstream model 改主键。"""
+
+    raw_catalog = load_bundled_catalog().model_dump(mode="json")
+    raw_catalog["provider_models"][0]["model_id"] = "deepseek-stable-alias"
+    raw_catalog["models"].append(
+        {
+            "id": "deepseek-stable-alias",
+            "display_name": "DeepSeek Stable Alias",
+            "capabilities": ["text", "translation"],
+        }
+    )
+
+    with pytest.raises(ValidationError, match="aliases require an explicit data migration"):
         ModelCatalog.model_validate(raw_catalog)
