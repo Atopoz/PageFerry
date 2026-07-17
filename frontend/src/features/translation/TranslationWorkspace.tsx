@@ -128,15 +128,6 @@ function formatBytes(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-/** 把内部语言代码映射为当前任务摘要中的短标签。 */
-function languageLabel(language: string): string {
-  if (language === 'auto') return '自动识别';
-  return (
-    languageOptions.find((option) => option.value === language)?.label ??
-    language
-  );
-}
-
 /** 返回某类文档不会产生意外遗漏的安全默认选项。 */
 function defaultDocumentOptions(
   kind: SupportedDocumentKind,
@@ -206,14 +197,17 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
     <section className="file-options" aria-labelledby="file-options-title">
       <header className="file-options-heading">
         <span>
-          <Settings2 aria-hidden="true" size={14} />
+          <Settings2 aria-hidden="true" size={13} />
           <strong id="file-options-title">文件选项</strong>
         </span>
         <small>{options.kind.toUpperCase()}</small>
       </header>
       <div className="file-options-controls">
         <label className="advanced-option-row">
-          <strong>翻译表格</strong>
+          <span className="advanced-option-copy">
+            <strong>翻译表格</strong>
+            <small>同时翻译表格内的文字内容</small>
+          </span>
           <Switch.Root
             className="option-switch"
             checked={options.translate_tables}
@@ -228,7 +222,10 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
 
         {options.kind === 'pptx' ? (
           <label className="advanced-option-row">
-            <strong>翻译演讲者备注</strong>
+            <span className="advanced-option-copy">
+              <strong>翻译演讲者备注</strong>
+              <small>包含每页幻灯片下方的备注</small>
+            </span>
             <Switch.Root
               className="option-switch"
               checked={options.translate_notes}
@@ -531,7 +528,7 @@ export function TranslationWorkspace({
       ) : (
         <div className="new-task-composer file-row-enter">
           <div className="selected-file-row">
-            <span className={`file-type file-type--${document.kind}`}>
+            <span className="file-type">
               <DocumentTypeIcon kind={document.kind} />
             </span>
             <div className="file-primary">
@@ -559,23 +556,6 @@ export function TranslationWorkspace({
           />
 
           <footer className="new-task-footer">
-            <div className="task-route-summary">
-              <span>
-                {languageLabel(sourceLanguage)}
-                <ArrowLeftRight aria-hidden="true" size={13} />
-                {languageLabel(targetLanguage)}
-              </span>
-              {selectedModel ? (
-                <strong>
-                  <ProviderIcon
-                    providerId={selectedModel.providerId}
-                    displayName={selectedModel.providerName}
-                    size={16}
-                  />
-                  {selectedModel.modelName}
-                </strong>
-              ) : null}
-            </div>
             <button
               className="start-button"
               type="button"

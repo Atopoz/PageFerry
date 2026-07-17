@@ -2,11 +2,11 @@
 
 import {
   AlertCircle,
-  Check,
+  Ban,
   CheckCircle2,
+  Clock,
   FileText,
   FolderOpen,
-  LoaderCircle,
   MoreHorizontal,
 } from 'lucide-react';
 
@@ -26,8 +26,6 @@ const jobStages = [
   { id: 'translating', label: '翻译文本' },
   { id: 'formatting', label: '生成文档' },
 ] as const;
-
-type JobStageState = 'pending' | 'active' | 'complete' | 'error';
 
 /** 从 bundled catalog 找出模型显示名，未加载时保留稳定 id。 */
 function modelDisplayName(
@@ -56,9 +54,19 @@ function jobErrorLabel(errorCode: string): string {
   return labels[errorCode] ?? '任务未完成';
 }
 
-/** 将任务状态压缩成任务行中可扫读的一句话。 */
+/** 返回运行中任务的当前阶段标签，翻译阶段附带真实片段计数。 */
+function runningLabel(job: TranslationJob): string {
+  const stage = jobStages.find((item) => item.id === job.progress_stage);
+  const label = stage?.label ?? '处理中';
+  if (job.progress_stage === 'translating' && job.total_segments > 0) {
+    return `${label} ${job.processed_segments} / ${job.total_segments}`;
+  }
+  return label;
+}
+
+/** 将任务状态压缩成状态 pill 中可扫读的一句话。 */
 function jobStatusLabel(job: TranslationJob): string {
-  if (job.status === 'running') return '处理中';
+  if (job.status === 'running') return runningLabel(job);
   if (job.status === 'succeeded' && job.fallback_segments > 0) {
     return `完成 · ${job.fallback_segments} 处回退`;
   }
@@ -73,63 +81,12 @@ function jobStatusLabel(job: TranslationJob): string {
   }[job.status];
 }
 
-/** 返回当前 stage 在三阶段时间线中的稳定序号。 */
-function currentStageIndex(job: TranslationJob): number {
-  const index = jobStages.findIndex((stage) => stage.id === job.progress_stage);
-  return index < 0 ? 0 : index;
-}
-
-/** 根据 job 状态判断单个阶段应显示为等待、运行、完成还是失败。 */
-function jobStageState(job: TranslationJob, stageIndex: number): JobStageState {
-  if (job.status === 'succeeded') return 'complete';
-  const current = currentStageIndex(job);
-  if (stageIndex < current) return 'complete';
-  if (stageIndex > current) return 'pending';
-  if (job.status === 'failed' || job.status === 'cancelled') return 'error';
-  return 'active';
-}
-
-/** 为屏幕阅读器生成不依赖视觉圆点的真实阶段进度摘要。 */
-function jobStageAriaLabel(job: TranslationJob): string {
-  const current = jobStages[currentStageIndex(job)];
-  if (job.status === 'succeeded') return '任务进度：三个阶段均已完成';
-  if (job.status === 'queued') return '任务进度：等待提取内容';
+/** 为屏幕阅读器生成运行中任务的进度摘要，与 pill 可见文案互补。 */
+function runningAriaLabel(job: TranslationJob): string {
   if (job.progress_stage === 'translating' && job.total_segments > 0) {
-    return `任务进度：${current.label}，已处理 ${job.processed_segments} / ${job.total_segments} 个片段`;
+    return `任务进度：翻译文本，已处理 ${job.processed_segments} / ${job.total_segments} 个片段`;
   }
-  return `任务进度：${current.label}`;
-}
-
-/** 渲染提取、翻译、生成三个离散阶段，中段只展示 backend 的真实片段计数。 */
-function JobStageTimeline({ job }: { job: TranslationJob }) {
-  return (
-    <div className="job-stage-timeline" aria-label={jobStageAriaLabel(job)}>
-      {jobStages.map((stage, index) => {
-        const state = jobStageState(job, index);
-        const showCounter =
-          stage.id === 'translating' &&
-          job.total_segments > 0 &&
-          (job.status === 'succeeded' || job.progress_stage === 'translating');
-        return (
-          <span className="job-stage" data-state={state} key={stage.id}>
-            <span className="job-stage-marker" aria-hidden="true">
-              {state === 'complete' ? <Check size={9} strokeWidth={3} /> : null}
-            </span>
-            <span className="job-stage-copy">
-              <strong>{stage.label}</strong>
-              {showCounter ? (
-                <small>
-                  {job.status === 'succeeded'
-                    ? `${job.total_segments} 个片段`
-                    : `${job.processed_segments} / ${job.total_segments}`}
-                </small>
-              ) : null}
-            </span>
-          </span>
-        );
-      })}
-    </div>
-  );
+  return `任务进度：${runningLabel(job)}`;
 }
 
 /** 把 ISO 时间格式化为历史列表中的紧凑本地时间。 */
@@ -206,34 +163,45 @@ export function JobList({
     <div className="job-list" aria-live="polite">
       {jobs.map((job) => {
         const outputPath = job.output_path;
-        const active = job.status === 'running' || job.status === 'queued';
         return (
           <article className="job-row" key={job.id}>
-            <span className={`file-type file-type--${job.document_type}`}>
+            <span className="file-type">
               <DocumentTypeIcon kind={job.document_type} />
             </span>
 
             <div className="file-primary">
               <strong>{job.source_name}</strong>
-              <span>
-                {modelDisplayName(catalog, job.model_id)}
-                {showCreatedAt
-                  ? ` · ${languageLabel(job.source_language)} → ${languageLabel(job.target_language)} · ${formatJobTime(job.created_at)}`
-                  : ''}
+              <span className="job-meta">
+                <b>{modelDisplayName(catalog, job.model_id)}</b>
+                {showCreatedAt ? (
+                  <i>
+                    {languageLabel(job.source_language)} →{' '}
+                    {languageLabel(job.target_language)} ·{' '}
+                    {formatJobTime(job.created_at)}
+                  </i>
+                ) : null}
               </span>
             </div>
 
-            <JobStageTimeline job={job} />
-
-            <div className={`job-state job-state--${job.status}`}>
-              {active ? (
-                <LoaderCircle className="spin" aria-hidden="true" size={15} />
+            <div
+              className={`job-state job-state--${job.status}`}
+              key={`${job.status}:${job.progress_stage}`}
+              aria-label={
+                job.status === 'running' ? runningAriaLabel(job) : undefined
+              }
+            >
+              {job.status === 'running' ? (
+                <span className="job-state-dot" aria-hidden="true" />
+              ) : job.status === 'queued' ? (
+                <Clock aria-hidden="true" size={13} />
               ) : job.status === 'succeeded' ? (
-                <CheckCircle2 aria-hidden="true" size={16} />
+                <CheckCircle2 aria-hidden="true" size={14} />
+              ) : job.status === 'cancelled' ? (
+                <Ban aria-hidden="true" size={13} />
               ) : (
-                <AlertCircle aria-hidden="true" size={16} />
+                <AlertCircle aria-hidden="true" size={14} />
               )}
-              {jobStatusLabel(job)}
+              <span>{jobStatusLabel(job)}</span>
             </div>
 
             {outputPath ? (

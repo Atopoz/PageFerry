@@ -693,7 +693,7 @@ describe('App', () => {
     );
   });
 
-  it('运行任务展示三阶段与真实片段计数，不再渲染伪百分比', async () => {
+  it('运行任务只在状态里展示当前阶段与真实片段计数', async () => {
     initialJobs = [
       {
         ...translationJob('running.docx', 'running-1'),
@@ -709,13 +709,12 @@ describe('App', () => {
     await screen.findByText('v0.1.0');
     fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
 
-    const timeline = screen.getByLabelText(
+    const state = screen.getByLabelText(
       '任务进度：翻译文本，已处理 17 / 25 个片段',
     );
-    expect(within(timeline).getByText('提取内容')).toBeInTheDocument();
-    expect(within(timeline).getByText('翻译文本')).toBeInTheDocument();
-    expect(within(timeline).getByText('生成文档')).toBeInTheDocument();
-    expect(within(timeline).getByText('17 / 25')).toBeInTheDocument();
+    expect(state).toHaveTextContent('翻译文本 17 / 25');
+    expect(screen.queryByText('提取内容')).toBeNull();
+    expect(screen.queryByText('生成文档')).toBeNull();
     expect(screen.queryByText('68%')).not.toBeInTheDocument();
     expect(document.querySelector('.job-progress-track')).toBeNull();
   });

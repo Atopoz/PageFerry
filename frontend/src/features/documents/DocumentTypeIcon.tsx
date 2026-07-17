@@ -1,5 +1,7 @@
 /** 为翻译 composer 与任务列表提供统一、易辨认的彩色文件类型图标。 */
 
+import { useId } from 'react';
+
 export type DocumentTypeKind = 'docx' | 'pptx' | 'txt' | 'md' | 'pdf';
 
 interface DocumentTypeIconProps {
@@ -7,142 +9,130 @@ interface DocumentTypeIconProps {
   size?: number;
 }
 
-/** 使用紧凑的 code-native SVG 表达文件格式，保证小尺寸下仍清晰可辨。 */
-export function DocumentTypeIcon({ kind, size = 28 }: DocumentTypeIconProps) {
-  if (kind === 'docx') {
-    return (
-      <svg
-        aria-hidden="true"
-        className="document-type-icon"
-        width={size}
-        height={size}
-        viewBox="0 0 32 32"
-        fill="none"
-      >
-        <rect x="7" y="3" width="22" height="26" rx="4" fill="#2B7CD3" />
-        <rect x="12" y="6" width="13" height="20" rx="2" fill="#FFFFFF" />
-        <path
-          d="M15 11H22M15 15H22M15 19H21M15 23H20"
-          stroke="#76A9E3"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-        />
-        <rect x="2" y="8" width="13" height="16" rx="3" fill="#185ABD" />
-        <path
-          d="M4.7 12.2L6.2 19.7L8.5 14.4L10.7 19.7L12.3 12.2"
-          stroke="#FFFFFF"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
+type DocumentGlyph = 'document' | 'presentation' | 'acrobat';
 
-  if (kind === 'pptx') {
-    return (
-      <svg
-        aria-hidden="true"
-        className="document-type-icon"
-        width={size}
-        height={size}
-        viewBox="0 0 32 32"
-        fill="none"
-      >
-        <rect x="7" y="3" width="22" height="26" rx="4" fill="#E76F3D" />
-        <rect x="12" y="7" width="13" height="18" rx="2" fill="#FFFFFF" />
-        <path
-          d="M15 20H22"
-          stroke="#F0A27F"
-          strokeWidth="1.7"
-          strokeLinecap="round"
-        />
-        <circle cx="18.5" cy="14" r="4" fill="#F6B195" />
-        <path d="M18.5 10V14H22.5" fill="#D94F22" />
-        <rect x="2" y="8" width="13" height="16" rx="3" fill="#C43E1C" />
-        <path
-          d="M6 19V12.5H8.5C10.1 12.5 11 13.35 11 14.7C11 16.1 10.05 16.95 8.45 16.95H7.55V19H6ZM7.55 15.65H8.35C9.1 15.65 9.5 15.33 9.5 14.72C9.5 14.12 9.1 13.8 8.35 13.8H7.55V15.65Z"
-          fill="#FFFFFF"
-        />
-      </svg>
-    );
-  }
+interface DocumentTypeSkin {
+  page: string;
+  fold: string;
+  label: string;
+  glyph: DocumentGlyph;
+  glyphColor: string;
+  uppercase?: boolean;
+}
 
-  if (kind === 'md') {
-    return (
-      <svg
-        aria-hidden="true"
-        className="document-type-icon"
-        width={size}
-        height={size}
-        viewBox="0 0 32 32"
-        fill="none"
-      >
-        <rect x="3" y="5" width="26" height="22" rx="4" fill="#343A40" />
-        <path
-          d="M7 20V12L10.5 15.8L14 12V20"
-          stroke="#FFFFFF"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-        <path
-          d="M21 11.5V19M17.8 16.2L21 19.4L24.2 16.2"
-          stroke="#8FD0DD"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
+/**
+ * 视觉参数与 react-file-icon（MIT 许可证）的 defaultStyles 对齐，
+ * 保持和 JOTO-Translation 历史任务列表一致的图标观感：
+ * 彩色纸面、右上角深色折角、半透明内容 glyph、底部色带标注扩展名。
+ */
+const skins: Record<DocumentTypeKind, DocumentTypeSkin> = {
+  docx: {
+    page: '#2C5898',
+    fold: '#254A80',
+    label: '#2C5898',
+    glyph: 'document',
+    glyphColor: 'rgba(255,255,255,0.4)',
+    uppercase: true,
+  },
+  pptx: {
+    page: '#D14423',
+    fold: '#AB381D',
+    label: '#D14423',
+    glyph: 'presentation',
+    glyphColor: 'rgba(255,255,255,0.4)',
+    uppercase: true,
+  },
+  txt: {
+    page: '#F5F5F5',
+    fold: '#DBDBDB',
+    label: '#A8A8A8',
+    glyph: 'document',
+    glyphColor: '#CECECE',
+  },
+  md: {
+    page: '#F5F5F5',
+    fold: '#DBDBDB',
+    label: '#A8A8A8',
+    glyph: 'document',
+    glyphColor: '#CECECE',
+  },
+  pdf: {
+    page: '#F5F5F5',
+    fold: '#DBDBDB',
+    label: '#D93831',
+    glyph: 'acrobat',
+    glyphColor: '#CECECE',
+  },
+};
 
-  if (kind === 'pdf') {
-    return (
-      <svg
-        aria-hidden="true"
-        className="document-type-icon"
-        width={size}
-        height={size}
-        viewBox="0 0 32 32"
-        fill="none"
-      >
-        <path
-          d="M7 3H20L27 10V27C27 28.1 26.1 29 25 29H7C5.9 29 5 28.1 5 27V5C5 3.9 5.9 3 7 3Z"
-          fill="#E5484D"
-        />
-        <path d="M20 3V10H27" fill="#F58B8E" />
-        <path
-          d="M9 21C12.5 17.8 14.3 13.3 15.1 9.5C16.3 14.6 18.3 18.1 23.5 20.5C18 19.5 13.9 19.7 9 21Z"
-          stroke="#FFFFFF"
-          strokeWidth="1.55"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
-      </svg>
-    );
-  }
+/** glyph 路径来自 react-file-icon（MIT），viewBox 同为 40×48。 */
+const glyphs: Record<DocumentGlyph, { d: string; transform: string }> = {
+  document: {
+    d: 'M12 4H0v2h12V4zM0 10h18V8H0v2zM0 0v2h18V0H0z',
+    transform: 'translate(15 15)',
+  },
+  presentation: {
+    d: 'M2 4H0v10c0 1.1.9 2 2 2h14v-2H2V4zm16-4H6C4.9 0 4 .9 4 2v8c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V2c0-1.1-.9-2-2-2zm0 10H6V2h12v8z',
+    transform: 'matrix(-1 0 0 1 34 12)',
+  },
+  acrobat: {
+    d: 'M10.15 1.095C9.938.33 9.42-.051 8.984.005c-.528.068-1.09.382-1.314.876-.63 1.416.685 5.582.887 6.279-1.28 3.863-5.66 11.5-7.806 12.017-.045-.505.225-1.965 3.055-3.785.146-.157.315-.348.393-.472-2.392 1.168-5.492 3.044-3.628 4.448.102.079.259.146.439.213 1.426.528 3.425-1.201 5.435-5.121 2.213-.73 3.999-1.28 6.526-1.662 2.762 1.875 4.616 2.257 5.874 1.774.348-.135.898-.573 1.055-1.145-1.022 1.258-3.414.382-5.323-.82 1.763-.191 3.582-.303 4.369-.056 1 .314.965.808.954.876.079-.27.191-.708-.022-1.056-.842-1.37-4.706-.573-6.11-.427-2.212-1.336-3.74-3.717-4.358-5.436.573-2.212 1.19-3.818.742-5.413zm-.954 4.638C8.826 4.42 8.309 1.5 9.14.556c1.628.932.618 3.144.056 5.177zm3.044 6.514c-2.134.393-3.583.944-5.66 1.764.617-1.202 1.785-4.268 2.346-6.29.787 1.573 1.741 3.111 3.314 4.526z',
+    transform: 'translate(14 9)',
+  },
+};
+
+/** 40×48 的经典文件图标：彩色纸面 + 折角 + 内容 glyph + 扩展名色带。 */
+export function DocumentTypeIcon({ kind, size = 30 }: DocumentTypeIconProps) {
+  const skin = skins[kind];
+  const glyph = glyphs[skin.glyph];
+  const gradientId = useId();
+  const label = skin.uppercase ? kind.toUpperCase() : kind;
 
   return (
     <svg
       aria-hidden="true"
       className="document-type-icon"
       width={size}
-      height={size}
-      viewBox="0 0 32 32"
+      height={(size * 48) / 40}
+      viewBox="0 0 40 48"
       fill="none"
     >
+      <defs>
+        <linearGradient id={gradientId} x1="100%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.25" />
+          <stop offset="66.67%" stopColor="#FFFFFF" stopOpacity="0" />
+        </linearGradient>
+      </defs>
+
       <path
-        d="M7 3H20L27 10V27C27 28.1 26.1 29 25 29H7C5.9 29 5 28.1 5 27V5C5 3.9 5.9 3 7 3Z"
-        fill="#4F8292"
+        d="M4 0H28L40 12V44A4 4 0 0 1 36 48H4A4 4 0 0 1 0 44V4A4 4 0 0 1 4 0Z"
+        fill={skin.page}
       />
-      <path d="M20 3V10H27" fill="#8DB0BA" />
       <path
-        d="M10 15H22M10 19H22M10 23H18"
-        stroke="#FFFFFF"
-        strokeWidth="1.8"
-        strokeLinecap="round"
+        d="M4 0H28L40 12V44A4 4 0 0 1 36 48H4A4 4 0 0 1 0 44V4A4 4 0 0 1 4 0Z"
+        fill={`url(#${gradientId})`}
       />
+      <path d="M28 0L40 12H28V0Z" fill={skin.fold} />
+      <g fill={skin.glyphColor} fillRule="evenodd">
+        <path d={glyph.d} transform={glyph.transform} />
+      </g>
+
+      <path
+        d="M0 34H40V44A4 4 0 0 1 36 48H4A4 4 0 0 1 0 44V34Z"
+        fill={skin.label}
+      />
+      <text
+        x="20"
+        y="44"
+        fill="#FFFFFF"
+        fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"
+        fontSize="9"
+        fontWeight="bold"
+        textAnchor="middle"
+        style={{ userSelect: 'none', pointerEvents: 'none' }}
+      >
+        {label}
+      </text>
     </svg>
   );
 }
