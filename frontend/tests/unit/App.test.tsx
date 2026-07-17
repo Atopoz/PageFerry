@@ -113,7 +113,7 @@ function customProviderStatus() {
 function translationJob(
   sourceName = 'sample.docx',
   id = 'job-1',
-  documentType: 'docx' | 'pptx' | 'txt' | 'md' = 'docx',
+  documentType: 'docx' | 'pptx' | 'xlsx' | 'txt' | 'md' = 'docx',
 ): TranslationJob {
   return {
     id,
@@ -129,6 +129,7 @@ function translationJob(
     source_language: null,
     target_language: 'zh-CN',
     output_path: `/tmp/${sourceName}`,
+    artifacts: [{ kind: 'translated', path: `/tmp/${sourceName}` }],
     error_code: null,
     translated_segments: 4,
     fallback_segments: 0,
@@ -580,7 +581,7 @@ describe('App', () => {
     ).toHaveTextContent('英语');
   });
 
-  it('拒绝未支持格式，且不宣称支持 PDF 或 XLSX', async () => {
+  it('支持 XLSX 但拒绝尚未接入的 PDF', async () => {
     render(<App />);
     await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
@@ -588,16 +589,18 @@ describe('App', () => {
       type: 'application/pdf',
     });
 
-    expect(screen.getByText('DOCX · PPTX · TXT · MD')).toBeInTheDocument();
+    expect(
+      screen.getByText('DOCX · PPTX · XLSX · TXT · MD'),
+    ).toBeInTheDocument();
     expect(input).toHaveAttribute('tabindex', '-1');
     expect(input).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.queryByText(/PDF|XLSX/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/PDF/i)).not.toBeInTheDocument();
     fireEvent.change(input as HTMLInputElement, {
       target: { files: [unsupportedFile] },
     });
 
     expect(screen.getByRole('alert')).toHaveTextContent(
-      '仅支持 DOCX、PPTX、TXT 与 Markdown。',
+      '仅支持 DOCX、PPTX、XLSX、TXT 与 Markdown。',
     );
     expect(screen.queryByRole('button', { name: '开始翻译' })).toBeNull();
   });
@@ -667,6 +670,25 @@ describe('App', () => {
       translate_tables: true,
       translate_notes: true,
     });
+  });
+
+  it('XLSX 可直接创建任务且不提交虚假高级选项', async () => {
+    render(<App />);
+    await waitForInitialState();
+    const input = document.querySelector('input[type="file"]');
+    const file = new File(['workbook'], 'sales.xlsx');
+
+    fireEvent.change(input as HTMLInputElement, { target: { files: [file] } });
+    expect(screen.queryByText('文件选项')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '开始翻译' }));
+    await screen.findByText('sales.xlsx');
+
+    const uploadCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url).endsWith('/api/v1/jobs/upload'));
+    const formData = uploadCall?.[1]?.body as FormData;
+    expect(formData.get('file')).toBe(file);
+    expect(formData.has('options')).toBe(false);
   });
 
   it('TXT 和 Markdown 不显示也不提交虚假高级选项', async () => {

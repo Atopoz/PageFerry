@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 SUPPORTED_DOCUMENTS: dict[str, DocumentKind] = {
     ".docx": "docx",
     ".pptx": "pptx",
+    ".xlsx": "xlsx",
     ".txt": "txt",
     ".md": "md",
 }
@@ -251,6 +252,10 @@ def _build_pipeline(
             translate_tables=translate_tables,
             translate_notes=translate_notes,
         )
+    if document_kind == "xlsx":
+        from modules.xlsx import XlsxPipeline
+
+        return XlsxPipeline(translator)
     if document_kind in {"txt", "md"}:
         from modules.plain_text import PlainTextPipeline
 
@@ -293,6 +298,14 @@ def _normalize_document_options(
                 else True
             ),
         )
+    if document_kind == "xlsx":
+        if options is not None:
+            raise JobServiceError(
+                "invalid_document_options",
+                "当前文件格式没有可配置的高级选项。",
+                status_code=400,
+            )
+        return None
     if options is not None:
         raise JobServiceError(
             "invalid_document_options",
@@ -338,7 +351,7 @@ def _document_kind_for_name(file_name: str) -> DocumentKind:
     if document_kind is None:
         raise JobServiceError(
             "unsupported_format",
-            "仅支持 DOCX、PPTX、TXT 与 Markdown。",
+            "仅支持 DOCX、PPTX、XLSX、TXT 与 Markdown。",
             status_code=400,
         )
     return document_kind

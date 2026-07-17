@@ -53,7 +53,7 @@ const coreZhCNMessages = {
   'translation.tables.description': '同时翻译表格内的文字内容',
   'translation.notes.title': '翻译演讲者备注',
   'translation.notes.description': '包含每页幻灯片下方的备注',
-  'translation.unsupportedFile': '仅支持 DOCX、PPTX、TXT 与 Markdown。',
+  'translation.unsupportedFile': '仅支持 DOCX、PPTX、XLSX、TXT 与 Markdown。',
   'translation.nativeDropUnavailable': '原生拖放暂时不可用，请点击选择文件。',
   'translation.documentFilter': 'PageFerry 文档',
   'translation.createFailed': '任务创建失败。',
@@ -183,7 +183,7 @@ const coreEnMessages: Record<keyof typeof coreZhCNMessages, string> = {
   'translation.notes.title': 'Translate speaker notes',
   'translation.notes.description': 'Include the notes below each slide',
   'translation.unsupportedFile':
-    'Only DOCX, PPTX, TXT, and Markdown are supported.',
+    'Only DOCX, PPTX, XLSX, TXT, and Markdown are supported.',
   'translation.nativeDropUnavailable':
     'Native drag and drop is unavailable. Click to choose a file instead.',
   'translation.documentFilter': 'PageFerry documents',

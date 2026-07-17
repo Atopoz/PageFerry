@@ -305,8 +305,8 @@ def test_empty_local_path_is_rejected_before_job_creation(tmp_path: Path) -> Non
 def test_unsupported_extension_is_rejected_before_job_creation(tmp_path: Path) -> None:
     """尚未接入的格式不能靠改扩展名绕过 runtime registry。"""
 
-    source = tmp_path / "sheet.xlsx"
-    source.write_bytes(b"not-an-xlsx")
+    source = tmp_path / "sheet.csv"
+    source.write_bytes(b"heading,value")
     service = _service(tmp_path)
 
     with pytest.raises(JobServiceError, match="仅支持"):

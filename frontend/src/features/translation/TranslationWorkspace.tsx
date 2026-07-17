@@ -84,6 +84,7 @@ interface ModelChoiceGroup {
 const supportedExtensions = new Set<SupportedDocumentKind>([
   'docx',
   'pptx',
+  'xlsx',
   'txt',
   'md',
 ]);
@@ -404,7 +405,7 @@ export function TranslationWorkspace({
       filters: [
         {
           name: t('translation.documentFilter'),
-          extensions: ['docx', 'pptx', 'txt', 'md'],
+          extensions: ['docx', 'pptx', 'xlsx', 'txt', 'md'],
         },
       ],
     });
@@ -544,7 +545,7 @@ export function TranslationWorkspace({
         type="file"
         tabIndex={-1}
         aria-hidden="true"
-        accept=".docx,.pptx,.txt,.md"
+        accept=".docx,.pptx,.xlsx,.txt,.md"
         onChange={(event) => {
           selectBrowserFile(event.target.files?.[0]);
           // 清空 DOM value，移除任务后仍可再次选择同一个文件。
@@ -573,7 +574,7 @@ export function TranslationWorkspace({
             </span>
             <strong>{t('translation.dropFile')}</strong>
             <span>{t('translation.chooseFile')}</span>
-            <small>DOCX · PPTX · TXT · MD</small>
+            <small>DOCX · PPTX · XLSX · TXT · MD</small>
           </button>
         </div>
       ) : (

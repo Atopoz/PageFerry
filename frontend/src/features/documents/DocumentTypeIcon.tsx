@@ -2,7 +2,7 @@
 
 import { useId } from 'react';
 
-export type DocumentTypeKind = 'docx' | 'pptx' | 'txt' | 'md' | 'pdf';
+export type DocumentTypeKind = 'docx' | 'pptx' | 'xlsx' | 'txt' | 'md' | 'pdf';
 
 interface DocumentTypeIconProps {
   kind: DocumentTypeKind;
@@ -39,6 +39,14 @@ const skins: Record<DocumentTypeKind, DocumentTypeSkin> = {
     fold: '#AB381D',
     label: '#D14423',
     glyph: 'presentation',
+    glyphColor: 'rgba(255,255,255,0.4)',
+    uppercase: true,
+  },
+  xlsx: {
+    page: '#217346',
+    fold: '#1B5E3A',
+    label: '#217346',
+    glyph: 'document',
     glyphColor: 'rgba(255,255,255,0.4)',
     uppercase: true,
   },

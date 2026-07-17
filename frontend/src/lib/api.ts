@@ -157,7 +157,7 @@ export type JobProgressStage = 'extracting' | 'translating' | 'formatting';
 export interface TranslationJob {
   id: string;
   source_name: string;
-  document_type: 'docx' | 'pptx' | 'txt' | 'md' | 'pdf';
+  document_type: 'docx' | 'pptx' | 'xlsx' | 'txt' | 'md' | 'pdf';
   status: JobStatus;
   progress: number;
   progress_stage: JobProgressStage;
@@ -168,12 +168,18 @@ export interface TranslationJob {
   source_language: string | null;
   target_language: string;
   output_path: string | null;
+  artifacts: TranslationArtifact[];
   error_code: string | null;
   translated_segments: number;
   fallback_segments: number;
   warning_codes: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface TranslationArtifact {
+  kind: 'translated' | 'bilingual';
+  path: string;
 }
 
 export type DocumentTranslationOptions =

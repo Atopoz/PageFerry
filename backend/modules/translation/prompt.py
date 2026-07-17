@@ -74,6 +74,13 @@ _FORMAT_CONSTRAINTS: dict[str, tuple[str, ...]] = {
         "If the candidate merged tags, split its wording across every source <p> and <span> slot.",
         "Return one repaired result shaped exactly like the source skeleton, with no explanation.",
     ),
+    "xlsx": (
+        "Translate only the text inside each <span> slot.",
+        "Keep every [SHEET_X][CELL_A1] marker and <span> tag unchanged.",
+        "Return every cell separately and in its original order without commentary.",
+        "Keep formulas, URLs, email addresses, paths, identifiers, and numeric values unchanged.",
+        "Prefer concise wording that remains readable inside a spreadsheet cell.",
+    ),
 }
 
 _DOCX_PARAGRAPH_EXAMPLES: dict[str, dict[str, str]] = {
