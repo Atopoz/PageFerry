@@ -144,8 +144,9 @@ def test_migrations_upgrade_legacy_database_without_losing_jobs(tmp_path) -> Non
 
         _insert_job(connection, "text-job", "txt")
         _insert_job(connection, "markdown-job", "md")
+        _insert_job(connection, "excel-job", "xlsx")
         with pytest.raises(sqlite3.IntegrityError):
-            _insert_job(connection, "unsupported-job", "xlsx")
+            _insert_job(connection, "unsupported-job", "csv")
 
         migrations = connection.execute(
             "SELECT name FROM schema_migrations ORDER BY name"
@@ -171,6 +172,7 @@ def test_migrations_upgrade_legacy_database_without_losing_jobs(tmp_path) -> Non
         ("0017_provider_model_runtime_settings.sql",),
         ("0018_manual_provider_models.sql",),
         ("0019_provider_active_state.sql",),
+        ("0020_job_artifacts_and_xlsx.sql",),
     ]
 
 

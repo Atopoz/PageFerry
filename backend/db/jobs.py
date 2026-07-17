@@ -12,6 +12,7 @@ from typing import Literal
 from modules.translation.contracts import (
     DocumentKind,
     DocumentTranslationOptions,
+    TranslationArtifact,
     TranslationProgress,
     TranslationProgressStage,
     TranslationResult,
@@ -28,6 +29,7 @@ class JobRecord:
     source_path: Path
     source_name: str
     output_path: Path | None
+    artifacts: tuple[TranslationArtifact, ...]
     document_type: DocumentKind
     status: JobStatus
     progress: int
@@ -105,9 +107,18 @@ class JobRepository:
                 "SELECT * FROM translation_jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
-        if row is None:
-            raise KeyError(job_id)
-        return _to_job(row)
+            if row is None:
+                raise KeyError(job_id)
+            artifact_rows = connection.execute(
+                """
+                SELECT kind, path
+                FROM translation_job_artifacts
+                WHERE job_id = ?
+                ORDER BY CASE kind WHEN 'translated' THEN 0 ELSE 1 END
+                """,
+                (job_id,),
+            ).fetchall()
+        return _to_job(row, _artifacts_from_rows(artifact_rows))
 
     def list_recent(self, limit: int = 30) -> list[JobRecord]:
         """按创建时间倒序读取有限数量的最近任务。"""
@@ -117,7 +128,27 @@ class JobRepository:
                 "SELECT * FROM translation_jobs ORDER BY created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
-        return [_to_job(row) for row in rows]
+            job_ids = [row["id"] for row in rows]
+            artifact_map: dict[str, list[TranslationArtifact]] = {}
+            if job_ids:
+                placeholders = ",".join("?" for _ in job_ids)
+                artifact_rows = connection.execute(
+                    f"""
+                    SELECT job_id, kind, path
+                    FROM translation_job_artifacts
+                    WHERE job_id IN ({placeholders})
+                    ORDER BY CASE kind WHEN 'translated' THEN 0 ELSE 1 END
+                    """,
+                    job_ids,
+                ).fetchall()
+                for artifact_row in artifact_rows:
+                    artifact_map.setdefault(artifact_row["job_id"], []).append(
+                        TranslationArtifact(
+                            kind=artifact_row["kind"],
+                            path=Path(artifact_row["path"]),
+                        )
+                    )
+        return [_to_job(row, tuple(artifact_map.get(row["id"], ()))) for row in rows]
 
     def mark_running(self, job_id: str) -> bool:
         """仅把 queued 任务推进为 running。"""
@@ -175,6 +206,9 @@ class JobRepository:
         """保存成功输出以及 fallback/warning 统计。"""
 
         processed_segments = result.translated_segments + result.fallback_segments
+        artifacts = result.artifacts or (
+            TranslationArtifact(kind="translated", path=result.output_path),
+        )
         with self._connection() as connection, connection:
             connection.execute(
                 """
@@ -196,6 +230,17 @@ class JobRepository:
                     _now(),
                     job_id,
                 ),
+            )
+            connection.execute(
+                "DELETE FROM translation_job_artifacts WHERE job_id = ?",
+                (job_id,),
+            )
+            connection.executemany(
+                """
+                INSERT INTO translation_job_artifacts (job_id, kind, path)
+                VALUES (?, ?, ?)
+                """,
+                ((job_id, artifact.kind, str(artifact.path)) for artifact in artifacts),
             )
 
     def mark_failed(self, job_id: str, error_code: str) -> None:
@@ -270,7 +315,10 @@ class JobRepository:
             connection.close()
 
 
-def _to_job(row: sqlite3.Row) -> JobRecord:
+def _to_job(
+    row: sqlite3.Row,
+    artifacts: tuple[TranslationArtifact, ...] = (),
+) -> JobRecord:
     """把 SQLite Row 转为不暴露存储细节的 JobRecord。"""
 
     raw_warnings = json.loads(row["warning_codes_json"] or "[]")
@@ -280,6 +328,7 @@ def _to_job(row: sqlite3.Row) -> JobRecord:
         source_path=Path(row["source_path"]),
         source_name=_safe_source_name(row["source_name"], row["source_path"]),
         output_path=Path(row["output_path"]) if row["output_path"] else None,
+        artifacts=artifacts,
         document_type=row["document_type"],
         status=row["status"],
         progress=row["progress"],
@@ -337,6 +386,8 @@ def _options_json(options: DocumentTranslationOptions | None) -> str | None:
         payload["translate_tables"] = options.translate_tables
     if options.translate_notes is not None:
         payload["translate_notes"] = options.translate_notes
+    if options.bilingual is not None:
+        payload["bilingual"] = options.bilingual
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
@@ -356,15 +407,25 @@ def _options_from_json(
         return None
     translate_tables = payload.get("translate_tables")
     translate_notes = payload.get("translate_notes")
+    bilingual = payload.get("bilingual")
     if translate_tables is not None and not isinstance(translate_tables, bool):
         return None
     if translate_notes is not None and not isinstance(translate_notes, bool):
+        return None
+    if bilingual is not None and not isinstance(bilingual, bool):
         return None
     return DocumentTranslationOptions(
         kind=document_type,
         translate_tables=translate_tables,
         translate_notes=translate_notes,
+        bilingual=bilingual,
     )
+
+
+def _artifacts_from_rows(rows: list[sqlite3.Row]) -> tuple[TranslationArtifact, ...]:
+    """把 artifact 查询结果转为不可变任务 contract。"""
+
+    return tuple(TranslationArtifact(kind=row["kind"], path=Path(row["path"])) for row in rows)
 
 
 def _safe_source_name(source_name: str | None, source_path: str) -> str:

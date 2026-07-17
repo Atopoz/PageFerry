@@ -5,7 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-DocumentKind = Literal["docx", "pptx", "txt", "md", "pdf"]
+DocumentKind = Literal["docx", "pptx", "xlsx", "txt", "md", "pdf"]
+TranslationArtifactKind = Literal["translated", "bilingual"]
 TranslationProgressStage = Literal["extracting", "translating", "formatting"]
 
 
@@ -16,6 +17,7 @@ class DocumentTranslationOptions:
     kind: DocumentKind
     translate_tables: bool | None = None
     translate_notes: bool | None = None
+    bilingual: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,9 +38,18 @@ class TranslationResult:
 
     output_path: Path
     document_kind: DocumentKind
+    artifacts: tuple["TranslationArtifact", ...] = ()
     translated_segments: int = 0
     fallback_segments: int = 0
     warning_codes: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class TranslationArtifact:
+    """描述一次翻译共享模型结果生成的一个可打开派生文件。"""
+
+    kind: TranslationArtifactKind
+    path: Path
 
 
 @dataclass(frozen=True, slots=True)

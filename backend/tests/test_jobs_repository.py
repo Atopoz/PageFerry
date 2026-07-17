@@ -4,7 +4,11 @@ from pathlib import Path
 
 from db.jobs import JobRepository
 from db.sqlite import initialize_database
-from modules.translation.contracts import TranslationProgress, TranslationResult
+from modules.translation.contracts import (
+    TranslationArtifact,
+    TranslationProgress,
+    TranslationResult,
+)
 
 
 def test_job_repository_persists_result_warnings_and_fallback_count(tmp_path) -> None:
@@ -47,11 +51,52 @@ def test_job_repository_persists_result_warnings_and_fallback_count(tmp_path) ->
     assert completed.processed_segments == 10
     assert completed.total_segments == 10
     assert completed.output_path == tmp_path / "output.md"
+    assert completed.artifacts == (
+        TranslationArtifact(kind="translated", path=tmp_path / "output.md"),
+    )
     assert completed.translated_segments == 8
     assert completed.fallback_segments == 2
     assert completed.warning_codes == ("segment_fallback",)
     assert completed.source_language == "en"
     assert completed.target_language == "zh-CN"
+
+
+def test_job_repository_persists_multiple_artifacts_in_stable_order(tmp_path: Path) -> None:
+    """同一 DOCX 任务的译文版与双语版必须作为独立 metadata 保存。"""
+
+    database = tmp_path / "pageferry.sqlite3"
+    initialize_database(database)
+    repository = JobRepository(database)
+    job = repository.create(
+        job_id="job-bilingual",
+        source_path=tmp_path / "source.docx",
+        source_name="source.docx",
+        document_type="docx",
+        provider_id="deepseek",
+        model_id="deepseek-v4-flash",
+        source_language="zh-CN",
+        target_language="en",
+    )
+    translated = tmp_path / "translated.docx"
+    bilingual = tmp_path / "bilingual.docx"
+
+    repository.mark_succeeded(
+        job.id,
+        TranslationResult(
+            output_path=translated,
+            document_kind="docx",
+            artifacts=(
+                TranslationArtifact(kind="translated", path=translated),
+                TranslationArtifact(kind="bilingual", path=bilingual),
+            ),
+            translated_segments=2,
+        ),
+    )
+
+    assert repository.get(job.id).artifacts == (
+        TranslationArtifact(kind="translated", path=translated),
+        TranslationArtifact(kind="bilingual", path=bilingual),
+    )
 
 
 def test_job_repository_persists_real_batch_progress_without_stage_regression(
