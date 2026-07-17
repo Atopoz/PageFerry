@@ -11,6 +11,7 @@ from main import create_app
 from modules.translation.contracts import (
     BatchTranslator,
     DocumentKind,
+    TranslationArtifact,
     TranslationBatchItem,
     TranslationBatchResult,
     TranslationProgress,
@@ -96,6 +97,31 @@ class ApiCopyPipeline:
         )
 
 
+class ApiBilingualCopyPipeline(ApiCopyPipeline):
+    """模拟一次执行同时生成译文版与双语版。"""
+
+    def translate(
+        self,
+        request: TranslationRequest,
+        *,
+        report_progress: TranslationProgressReporter | None = None,
+    ) -> TranslationResult:
+        """复用基础进度与译文文件, 再增加一个双语 artifact。"""
+
+        translated_result = super().translate(request, report_progress=report_progress)
+        bilingual = request.output_dir / "bilingual.docx"
+        bilingual.write_bytes(request.source_path.read_bytes())
+        return TranslationResult(
+            output_path=translated_result.output_path,
+            document_kind=self.document_kind,
+            artifacts=(
+                TranslationArtifact(kind="translated", path=translated_result.output_path),
+                TranslationArtifact(kind="bilingual", path=bilingual),
+            ),
+            translated_segments=translated_result.translated_segments,
+        )
+
+
 class RecordingPipelineFactory:
     """记录 API 传入的格式选项, 并返回无网络 copy pipeline。"""
 
@@ -166,6 +192,51 @@ def test_pptx_options_are_snapshotted_and_reach_pipeline(tmp_path: Path) -> None
     assert factory.options.kind == "pptx"
     assert factory.options.translate_tables is False
     assert factory.options.translate_notes is True
+
+
+def test_docx_bilingual_option_returns_two_artifacts(tmp_path: Path) -> None:
+    """DOCX 双语选项必须冻结, 成功响应按稳定 kind 返回两个派生物。"""
+
+    source = tmp_path / "source.docx"
+    source.write_bytes(b"document")
+    data_dir = tmp_path / "app-data"
+    app = create_app(Settings(data_dir=data_dir))
+    app.state.translation_job_service = TranslationJobService(
+        JobRepository(data_dir / "pageferry.sqlite3"),
+        ApiResolver(),
+        workspace_dir=data_dir / "workspace",
+        output_dir=data_dir / "outputs",
+        pipeline_factory=lambda kind, _translator, _options: ApiBilingualCopyPipeline(kind),
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/jobs",
+            json={
+                "source_path": str(source),
+                "source_language": "zh-CN",
+                "target_language": "en",
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-flash",
+                "options": {
+                    "kind": "docx",
+                    "translate_tables": True,
+                    "bilingual": True,
+                },
+            },
+        )
+        completed = client.get("/api/v1/jobs").json()[0]
+
+    assert created.status_code == 202
+    assert created.json()["options"] == {
+        "kind": "docx",
+        "translate_tables": True,
+        "bilingual": True,
+    }
+    assert [artifact["kind"] for artifact in completed["artifacts"]] == [
+        "translated",
+        "bilingual",
+    ]
 
 
 def test_path_job_api_runs_in_background_and_hides_source_path(tmp_path: Path) -> None:

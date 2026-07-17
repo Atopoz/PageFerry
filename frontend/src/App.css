@@ -1184,6 +1184,55 @@
   background: var(--surface-muted);
 }
 
+.artifact-actions,
+.artifact-action {
+  display: inline-flex;
+  align-items: center;
+}
+
+.artifact-actions {
+  gap: 6px;
+}
+
+.artifact-action .artifact-open-button {
+  border-radius: 7px 0 0 7px;
+}
+
+.artifact-action .artifact-menu-trigger {
+  width: 28px;
+  min-height: 34px;
+  padding: 0;
+  border-left: 0;
+  border-radius: 0 7px 7px 0;
+}
+
+.artifact-menu {
+  min-width: 172px;
+  padding: 5px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 12px 30px rgb(20 34 40 / 14%);
+  z-index: 80;
+}
+
+.artifact-menu-item {
+  min-height: 32px;
+  padding: 0 9px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 11px;
+  outline: none;
+  cursor: default;
+}
+
+.artifact-menu-item[data-highlighted] {
+  background: var(--surface-muted);
+}
+
 .history-toolbar {
   margin-bottom: 12px;
   display: flex;

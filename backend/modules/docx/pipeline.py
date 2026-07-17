@@ -21,6 +21,7 @@ from modules.translation.batch_fanout import (
 )
 from modules.translation.contracts import (
     BatchTranslator,
+    TranslationArtifact,
     TranslationBatchResult,
     TranslationProgress,
     TranslationProgressReporter,
@@ -28,6 +29,7 @@ from modules.translation.contracts import (
     TranslationResult,
 )
 
+from .bilingual_formatter import DocxBilingualFormatter
 from .entities import DocxSegment, StoryKind, TableRowSegment
 from .extractor import DocxExtractor
 from .formatter import DocxFormatter
@@ -82,15 +84,23 @@ class DocxPipeline:
 
     document_kind = "docx"
 
-    def __init__(self, translator: BatchTranslator, *, translate_tables: bool = True) -> None:
+    def __init__(
+        self,
+        translator: BatchTranslator,
+        *,
+        translate_tables: bool = True,
+        bilingual: bool = False,
+    ) -> None:
         """绑定 provider-neutral translator 与表格开关。"""
 
         self._translator = translator
         self._translate_tables = translate_tables
+        self._bilingual = bilingual
         self._extractor = DocxExtractor()
         self._table_extractor = DocxTableExtractor(self._extractor)
         self._formatter = DocxFormatter()
         self._table_formatter = DocxTableFormatter(self._formatter)
+        self._bilingual_formatter = DocxBilingualFormatter()
 
     def translate(
         self,
@@ -102,11 +112,17 @@ class DocxPipeline:
 
         language = _safe_path_component(request.target_language)
         output_path = request.output_dir / f"{request.source_path.stem}.{language}.docx"
+        bilingual_output_path = (
+            request.output_dir / f"{request.source_path.stem}.bilingual-{language}.docx"
+            if self._bilingual
+            else None
+        )
         return self.translate_to(
             source_path=request.source_path,
             output_path=output_path,
             source_language=request.source_language,
             target_language=request.target_language,
+            bilingual_output_path=bilingual_output_path,
             report_progress=report_progress,
         )
 
@@ -117,6 +133,7 @@ class DocxPipeline:
         output_path: str | Path,
         source_language: str | None,
         target_language: str,
+        bilingual_output_path: str | Path | None = None,
         report_progress: TranslationProgressReporter | None = None,
     ) -> TranslationResult:
         """把一个 DOCX 翻译到显式目标路径。"""
@@ -125,7 +142,12 @@ class DocxPipeline:
             report_progress(TranslationProgress(stage="extracting"))
         source = Path(source_path)
         output = Path(output_path)
+        bilingual_output = Path(bilingual_output_path) if bilingual_output_path else None
         self._validate_paths(source, output)
+        if bilingual_output is not None:
+            self._validate_paths(source, bilingual_output)
+            if bilingual_output.resolve() == output.resolve():
+                raise ValueError("docx_artifact_paths_collide")
         output.parent.mkdir(parents=True, exist_ok=True)
         expected_signature = _package_signature(source)
 
@@ -197,9 +219,28 @@ class DocxPipeline:
             paragraph_translations=paragraph_translations,
             target_language=target_language,
         )
+        artifacts = [TranslationArtifact(kind="translated", path=output)]
+        if self._bilingual:
+            if bilingual_output is None:
+                bilingual_output = output.with_name(f"{output.stem}.bilingual{output.suffix}")
+            try:
+                self._write_bilingual_atomically(
+                    source,
+                    output,
+                    bilingual_output,
+                    segments=segments,
+                    source_signature=expected_signature,
+                )
+            except Exception:
+                # 请求的派生物必须完整交付; 双语版失败时不留下看似成功的半套结果。
+                output.unlink(missing_ok=True)
+                bilingual_output.unlink(missing_ok=True)
+                raise
+            artifacts.append(TranslationArtifact(kind="bilingual", path=bilingual_output))
         return TranslationResult(
             output_path=output,
             document_kind="docx",
+            artifacts=tuple(artifacts),
             translated_segments=stats.translated_segments,
             fallback_segments=stats.fallback_segments,
             warning_codes=tuple(sorted(stats.warning_codes)),
@@ -448,6 +489,46 @@ class DocxPipeline:
         Document(str(temporary_path))
         if _package_signature(temporary_path) != expected_signature:
             raise ValueError("docx_structure_signature_changed")
+
+    def _write_bilingual_atomically(
+        self,
+        source: Path,
+        translated: Path,
+        output: Path,
+        *,
+        segments: tuple[DocxSegment, ...],
+        source_signature: _PackageSignature,
+    ) -> None:
+        """不再次调用模型, 从译文版生成并校验双语派生文件。"""
+
+        output.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temp_name = tempfile.mkstemp(
+            dir=output.parent,
+            prefix=f".{output.name}.",
+            suffix=".tmp.docx",
+        )
+        os.close(descriptor)
+        temporary = Path(temp_name)
+        try:
+            source_document = Document(str(source))
+            bilingual_document = Document(str(translated))
+            self._bilingual_formatter.apply(source_document, bilingual_document, segments)
+            bilingual_document.save(str(temporary))
+            # 双语布局会有意增加 run 与换行, 结构签名以布局完成后的临时包为准;
+            # relationship 图仍必须和源文件完全一致。
+            layout_signature = _package_signature(temporary)
+            expected_signature = _PackageSignature(
+                story_structures=layout_signature.story_structures,
+                relationships=source_signature.relationships,
+            )
+            with temporary.open("r+b") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._validate_output(temporary, expected_signature)
+            os.replace(temporary, output)
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def _validate_paths(source: Path, output: Path) -> None:

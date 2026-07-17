@@ -26,6 +26,7 @@ class DocxOptionsRequest(BaseModel):
 
     kind: Literal["docx"]
     translate_tables: bool = True
+    bilingual: bool = False
 
 
 class PptxOptionsRequest(BaseModel):
@@ -57,12 +58,33 @@ class PathJobRequest(BaseModel):
     options: DocumentOptionsRequest | None = None
 
 
-class DocumentOptionsResponse(BaseModel):
-    """返回创建任务时冻结的格式专属选项。"""
+class DocxOptionsResponse(BaseModel):
+    """返回创建任务时冻结的 DOCX 选项。"""
 
-    kind: Literal["docx", "pptx"]
+    kind: Literal["docx"]
     translate_tables: bool
-    translate_notes: bool | None = None
+    bilingual: bool
+
+
+class PptxOptionsResponse(BaseModel):
+    """返回创建任务时冻结的 PPTX 选项。"""
+
+    kind: Literal["pptx"]
+    translate_tables: bool
+    translate_notes: bool
+
+
+DocumentOptionsResponse = Annotated[
+    DocxOptionsResponse | PptxOptionsResponse,
+    Field(discriminator="kind"),
+]
+
+
+class JobArtifactResponse(BaseModel):
+    """返回一次模型翻译生成的一个派生文件。"""
+
+    kind: Literal["translated", "bilingual"]
+    path: Path
 
 
 class JobResponse(BaseModel):
@@ -73,6 +95,7 @@ class JobResponse(BaseModel):
     id: str
     source_name: str
     output_path: Path | None
+    artifacts: tuple[JobArtifactResponse, ...]
     document_type: DocumentKind
     status: JobStatus
     progress: int
@@ -184,15 +207,26 @@ def _job_response(job: JobRecord) -> JobResponse:
 
     options = None
     if job.options is not None and job.options.kind in {"docx", "pptx"}:
-        options = DocumentOptionsResponse(
-            kind=job.options.kind,
-            translate_tables=job.options.translate_tables is not False,
-            translate_notes=job.options.translate_notes,
-        )
+        if job.options.kind == "docx":
+            options = DocxOptionsResponse(
+                kind="docx",
+                translate_tables=job.options.translate_tables is not False,
+                bilingual=job.options.bilingual is True,
+            )
+        else:
+            options = PptxOptionsResponse(
+                kind="pptx",
+                translate_tables=job.options.translate_tables is not False,
+                translate_notes=job.options.translate_notes is not False,
+            )
     return JobResponse(
         id=job.id,
         source_name=job.source_name,
         output_path=job.output_path,
+        artifacts=tuple(
+            JobArtifactResponse(kind=artifact.kind, path=artifact.path)
+            for artifact in job.artifacts
+        ),
         document_type=job.document_type,
         status=job.status,
         progress=job.progress,
@@ -226,6 +260,7 @@ def _document_options(
         translate_notes=(
             options.translate_notes if isinstance(options, PptxOptionsRequest) else None
         ),
+        bilingual=(options.bilingual if isinstance(options, DocxOptionsRequest) else None),
     )
 
 

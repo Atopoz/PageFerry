@@ -241,7 +241,12 @@ def _build_pipeline(
         from modules.docx import DocxPipeline
 
         translate_tables = options.translate_tables if options is not None else True
-        return DocxPipeline(translator, translate_tables=translate_tables)
+        bilingual = options.bilingual if options is not None else False
+        return DocxPipeline(
+            translator,
+            translate_tables=translate_tables,
+            bilingual=bilingual is True,
+        )
     if document_kind == "pptx":
         from modules.pptx import PptxPipeline
 
@@ -282,6 +287,11 @@ def _normalize_document_options(
                 options.translate_tables
                 if options is not None and options.translate_tables is not None
                 else True
+            ),
+            bilingual=(
+                options.bilingual
+                if options is not None and options.bilingual is not None
+                else False
             ),
         )
     if document_kind == "pptx":

@@ -7,13 +7,22 @@ import {
   Clock,
   FileText,
   FolderOpen,
+  FolderSearch,
   MoreHorizontal,
+  PanelsTopLeft,
 } from 'lucide-react';
+import { DropdownMenu } from 'radix-ui';
 
 import { DocumentTypeIcon } from '@/features/documents/DocumentTypeIcon';
 import { useI18n, type Translate, type UiLocale } from '@/i18n/i18n';
 import { translationLanguageLabel } from '@/i18n/translation-languages';
-import type { ModelCatalog, TranslationJob } from '@/lib/api';
+import type {
+  ModelCatalog,
+  TranslationArtifact,
+  TranslationJob,
+} from '@/lib/api';
+
+type OutputAction = 'open' | 'reveal' | 'choose_application';
 
 interface JobListProps {
   jobs: TranslationJob[];
@@ -116,15 +125,22 @@ function isTauriRuntime(): boolean {
 }
 
 /** 请求 Rust 校验输出路径，再调用系统默认应用打开文件。 */
-async function openOutput(
+async function runOutputAction(
   path: string,
+  action: OutputAction,
   desktopOnlyMessage: string,
 ): Promise<void> {
   if (!isTauriRuntime()) {
     throw new Error(desktopOnlyMessage);
   }
   const { invoke } = await import('@tauri-apps/api/core');
-  await invoke('open_output', { path });
+  await invoke('open_output', { path, action });
+}
+
+/** 为旧任务补出译文 artifact，避免 migration 前的历史结果失去打开入口。 */
+function jobArtifacts(job: TranslationJob): TranslationArtifact[] {
+  if (job.artifacts.length > 0) return job.artifacts;
+  return job.output_path ? [{ kind: 'translated', path: job.output_path }] : [];
 }
 
 /** 渲染当前会话和历史页共用的任务行。 */
@@ -138,9 +154,9 @@ export function JobList({
   const { locale, t } = useI18n();
 
   /** 打开一个已完成任务，并把原生 opener 失败交给所属页面展示。 */
-  async function openJobOutput(path: string) {
+  async function runJobOutputAction(path: string, action: OutputAction) {
     try {
-      await openOutput(path, t('jobs.desktopOnly'));
+      await runOutputAction(path, action, t('jobs.desktopOnly'));
     } catch (error) {
       onError(error instanceof Error ? error.message : t('jobs.openFailed'));
     }
@@ -158,7 +174,7 @@ export function JobList({
   return (
     <div className="job-list" aria-live="polite">
       {jobs.map((job) => {
-        const outputPath = job.output_path;
+        const artifacts = jobArtifacts(job);
         return (
           <article className="job-row" key={job.id}>
             <span className="file-type">
@@ -200,15 +216,70 @@ export function JobList({
               <span>{jobStatusLabel(job, t)}</span>
             </div>
 
-            {outputPath ? (
-              <button
-                className="row-action"
-                type="button"
-                onClick={() => void openJobOutput(outputPath)}
-              >
-                <FolderOpen aria-hidden="true" size={15} />
-                {t('jobs.openFile')}
-              </button>
+            {artifacts.length > 0 ? (
+              <div className="artifact-actions">
+                {artifacts.map((artifact) => (
+                  <div className="artifact-action" key={artifact.kind}>
+                    <button
+                      className="row-action artifact-open-button"
+                      type="button"
+                      onClick={() =>
+                        void runJobOutputAction(artifact.path, 'open')
+                      }
+                    >
+                      <FolderOpen aria-hidden="true" size={15} />
+                      {artifact.kind === 'bilingual'
+                        ? t('jobs.openBilingual')
+                        : t('jobs.openTranslated')}
+                    </button>
+                    <DropdownMenu.Root>
+                      <DropdownMenu.Trigger asChild>
+                        <button
+                          className="row-action artifact-menu-trigger"
+                          type="button"
+                          aria-label={t('jobs.openOptions', {
+                            artifact:
+                              artifact.kind === 'bilingual'
+                                ? t('jobs.artifact.bilingual')
+                                : t('jobs.artifact.translated'),
+                          })}
+                        >
+                          <MoreHorizontal aria-hidden="true" size={16} />
+                        </button>
+                      </DropdownMenu.Trigger>
+                      <DropdownMenu.Portal>
+                        <DropdownMenu.Content
+                          className="artifact-menu"
+                          sideOffset={5}
+                          align="end"
+                        >
+                          <DropdownMenu.Item
+                            className="artifact-menu-item"
+                            onSelect={() =>
+                              void runJobOutputAction(artifact.path, 'reveal')
+                            }
+                          >
+                            <FolderSearch aria-hidden="true" size={14} />
+                            {t('jobs.revealFile')}
+                          </DropdownMenu.Item>
+                          <DropdownMenu.Item
+                            className="artifact-menu-item"
+                            onSelect={() =>
+                              void runJobOutputAction(
+                                artifact.path,
+                                'choose_application',
+                              )
+                            }
+                          >
+                            <PanelsTopLeft aria-hidden="true" size={14} />
+                            {t('jobs.chooseApplication')}
+                          </DropdownMenu.Item>
+                        </DropdownMenu.Content>
+                      </DropdownMenu.Portal>
+                    </DropdownMenu.Root>
+                  </div>
+                ))}
+              </div>
             ) : (
               <button
                 className="icon-button"

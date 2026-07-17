@@ -1,6 +1,7 @@
 //! 校验并打开 PageFerry 生成的输出文件，收紧 renderer 到本机文件系统的边界。
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -66,17 +67,70 @@ fn validate_output_path(path: &Path, roots: &[PathBuf]) -> Result<PathBuf, Strin
     Ok(canonical_path)
 }
 
-/// 打开一个已完成任务的输出文件，拒绝 renderer 指定的其他本机路径。
+/// 使用系统选择应用界面打开文件。
+#[cfg(target_os = "macos")]
+fn choose_application(path: &Path) -> Result<(), String> {
+    let script =
+        r#"POSIX path of (choose application with prompt "选择用于打开 PageFerry 输出文件的应用")"#;
+    let selected = Command::new("/usr/bin/osascript")
+        .args(["-e", script])
+        .output()
+        .map_err(|_| "系统无法显示应用选择器。".to_owned())?;
+    if !selected.status.success() {
+        return Err("未选择用于打开文件的应用。".to_owned());
+    }
+    let application =
+        String::from_utf8(selected.stdout).map_err(|_| "系统返回了无效的应用路径。".to_owned())?;
+    let application = application.trim();
+    if application.is_empty() {
+        return Err("未选择用于打开文件的应用。".to_owned());
+    }
+    Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg(application)
+        .arg(path)
+        .spawn()
+        .map_err(|_| "所选应用无法打开输出文件。".to_owned())?;
+    Ok(())
+}
+
+/// 使用 Windows 原生“打开方式”界面选择应用。
+#[cfg(target_os = "windows")]
+fn choose_application(path: &Path) -> Result<(), String> {
+    Command::new("rundll32.exe")
+        .arg("shell32.dll,OpenAs_RunDLL")
+        .arg(path)
+        .spawn()
+        .map_err(|_| "系统无法显示应用选择器。".to_owned())?;
+    Ok(())
+}
+
+/// Linux 桌面没有统一的跨发行版应用选择协议，先给出明确边界。
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn choose_application(_path: &Path) -> Result<(), String> {
+    Err("当前系统暂不支持统一的应用选择器，请先修改文件的默认应用。".to_owned())
+}
+
+/// 对一个已完成任务的输出执行受限系统动作。
 #[tauri::command]
-pub(crate) fn open_output(app: AppHandle, path: String) -> Result<(), String> {
+pub(crate) fn open_output(app: AppHandle, path: String, action: String) -> Result<(), String> {
     let canonical_path = validate_output_path(Path::new(&path), &allowed_output_roots(&app)?)?;
     let utf8_path = canonical_path
         .to_str()
         .ok_or_else(|| "输出文件路径不是有效 UTF-8。".to_owned())?;
 
-    app.opener()
-        .open_path(utf8_path, None::<&str>)
-        .map_err(|_| "系统无法打开输出文件。".to_owned())
+    match action.as_str() {
+        "open" => app
+            .opener()
+            .open_path(utf8_path, None::<&str>)
+            .map_err(|_| "系统无法打开输出文件。".to_owned()),
+        "reveal" => app
+            .opener()
+            .reveal_item_in_dir(&canonical_path)
+            .map_err(|_| "系统无法在文件夹中定位输出文件。".to_owned()),
+        "choose_application" => choose_application(&canonical_path),
+        _ => Err("不支持的输出文件操作。".to_owned()),
+    }
 }
 
 #[cfg(test)]

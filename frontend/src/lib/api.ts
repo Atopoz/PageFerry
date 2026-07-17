@@ -186,6 +186,7 @@ export type DocumentTranslationOptions =
   | {
       kind: 'docx';
       translate_tables: boolean;
+      bilingual: boolean;
     }
   | {
       kind: 'pptx';

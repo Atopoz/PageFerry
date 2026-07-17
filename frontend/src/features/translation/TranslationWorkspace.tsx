@@ -125,7 +125,9 @@ function formatBytes(bytes: number): string {
 function defaultDocumentOptions(
   kind: SupportedDocumentKind,
 ): DocumentTranslationOptions | null {
-  if (kind === 'docx') return { kind, translate_tables: true };
+  if (kind === 'docx') {
+    return { kind, translate_tables: true, bilingual: false };
+  }
   if (kind === 'pptx') {
     return { kind, translate_tables: true, translate_notes: true };
   }
@@ -271,6 +273,24 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
               aria-label={t('translation.notes.title')}
               onCheckedChange={(checked) =>
                 onChange({ ...options, translate_notes: checked })
+              }
+            >
+              <Switch.Thumb />
+            </Switch.Root>
+          </label>
+        ) : null}
+        {options.kind === 'docx' ? (
+          <label className="advanced-option-row">
+            <span className="advanced-option-copy">
+              <strong>{t('translation.bilingual.title')}</strong>
+              <small>{t('translation.bilingual.description')}</small>
+            </span>
+            <Switch.Root
+              className="option-switch"
+              checked={options.bilingual}
+              aria-label={t('translation.bilingual.title')}
+              onCheckedChange={(checked) =>
+                onChange({ ...options, bilingual: checked })
               }
             >
               <Switch.Thumb />

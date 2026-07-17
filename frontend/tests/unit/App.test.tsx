@@ -464,7 +464,7 @@ describe('App', () => {
     await waitForInitialState();
 
     expect(
-      screen.queryByRole('button', { name: '打开文件' }),
+      screen.queryByRole('button', { name: '打开译文版' }),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
 
@@ -473,12 +473,47 @@ describe('App', () => {
     ).toBeInTheDocument();
     expect(await screen.findByText('old-contract.docx')).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: '打开文件' }),
+      screen.getByRole('button', { name: '打开译文版' }),
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '历史记录' })).toHaveAttribute(
       'aria-current',
       'page',
     );
+  });
+
+  it('历史任务分别展示译文版和双语版的系统打开方式', async () => {
+    initialJobs = [
+      {
+        ...translationJob('bilingual.docx', 'history-bilingual'),
+        artifacts: [
+          { kind: 'translated', path: '/tmp/translated.docx' },
+          { kind: 'bilingual', path: '/tmp/bilingual.docx' },
+        ],
+      },
+    ];
+    render(<App />);
+    await waitForInitialState();
+    fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
+
+    expect(
+      await screen.findByRole('button', { name: '打开译文版' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: '打开双语版' }),
+    ).toBeInTheDocument();
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: '双语版打开方式' }),
+      {
+        button: 0,
+        ctrlKey: false,
+      },
+    );
+    expect(
+      await screen.findByRole('menuitem', { name: '在文件夹中显示' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('menuitem', { name: '选择应用打开…' }),
+    ).toBeInTheDocument();
   });
 
   it('切换一级页面时保留尚未提交的文件、语言与 API Key', async () => {
@@ -617,8 +652,13 @@ describe('App', () => {
     expect(screen.getByText('准备就绪')).toBeInTheDocument();
     expect(screen.getByText('文件选项')).toBeInTheDocument();
     const tableSwitch = screen.getByRole('switch', { name: '翻译表格' });
+    const bilingualSwitch = screen.getByRole('switch', {
+      name: '生成双语版',
+    });
     expect(tableSwitch).toBeChecked();
+    expect(bilingualSwitch).not.toBeChecked();
     fireEvent.click(tableSwitch);
+    fireEvent.click(bilingualSwitch);
     fireEvent.click(screen.getByRole('button', { name: '开始翻译' }));
 
     expect(
@@ -636,6 +676,7 @@ describe('App', () => {
     expect(JSON.parse(String(formData.get('options')))).toEqual({
       kind: 'docx',
       translate_tables: false,
+      bilingual: true,
     });
 
     fireEvent.click(screen.getByRole('button', { name: '历史记录' }));

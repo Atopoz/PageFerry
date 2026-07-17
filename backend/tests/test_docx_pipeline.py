@@ -689,3 +689,43 @@ def test_shared_request_uses_safe_output_name(tmp_path: Path) -> None:
         processed_segments=1,
         total_segments=1,
     )
+
+
+def test_bilingual_mode_derives_two_artifacts_without_translating_twice(tmp_path: Path) -> None:
+    """双语版复用同一次翻译, 正文段内堆叠且表格只保留一份译文。"""
+
+    source = tmp_path / "source.docx"
+    document = Document()
+    document.add_paragraph("第一条原文", style="List Number")
+    document.add_paragraph("第二条原文", style="List Number")
+    document.add_table(rows=1, cols=1).cell(0, 0).text = "表格原文"
+    document.save(source)
+
+    def transform(text: str) -> str:
+        """保持 marker/span 骨架并替换测试正文。"""
+
+        return (
+            text.replace("第一条原文", "First item")
+            .replace("第二条原文", "Second item")
+            .replace("表格原文", "Table text")
+        )
+
+    translator = RecordingTranslator(transform)
+    result = DocxPipeline(translator, bilingual=True).translate(
+        _request(source, tmp_path / "outputs")
+    )
+
+    assert [artifact.kind for artifact in result.artifacts] == ["translated", "bilingual"]
+    assert [hint for hint, _texts in translator.calls] == ["docx", "docx_table"]
+    translated = Document(result.artifacts[0].path)
+    bilingual = Document(result.artifacts[1].path)
+    assert [paragraph.text for paragraph in translated.paragraphs] == [
+        "First item",
+        "Second item",
+    ]
+    assert [paragraph.text for paragraph in bilingual.paragraphs] == [
+        "第一条原文\nFirst item",
+        "第二条原文\nSecond item",
+    ]
+    assert len(bilingual.tables) == 1
+    assert bilingual.tables[0].cell(0, 0).text == "Table text"
