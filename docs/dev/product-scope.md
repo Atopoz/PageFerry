@@ -29,6 +29,7 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 
 - DOCX 翻译。
 - PPTX 翻译，包括已有 speaker notes 的正文。
+- XLSX 翻译，保护公式、合并单元格与 Excel Table 结构。
 - TXT 翻译。
 - Markdown 翻译，保护代码块、inline code 与链接目标。
 - 原生文本型 PDF 翻译，作为首版后续的独立 pipeline 阶段。
@@ -37,10 +38,11 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 - 五个 preset 常驻列表；每个 provider 配置一个 API Key，检测时由系统自动选定默认模型，用户之后可以调整。
 - 用户可以用显示名与 Base URL 创建 OpenAI-compatible 自定义 provider。
 - 本地任务状态、进度、失败原因和历史记录。
-- 输出文件定位与“用系统默认应用打开”。
+- DOCX 可选一次翻译同时生成译文版与段内原文-译文双语版。
+- 每个输出 artifact 可以用系统默认应用打开、在文件夹中定位或选择应用打开。
 - macOS Apple Silicon 安装包作为第一个发布目标。
 
-当前文件选择器、拖放校验和 job 入口只接受 DOCX、PPTX、TXT、Markdown。PDF 与 XLSX 尚未形成端到端能力，不在界面中展示为支持格式。
+当前文件选择器、拖放校验和 job 入口接受 DOCX、PPTX、XLSX、TXT、Markdown。PDF 尚未形成端到端能力，不在界面中展示为支持格式。
 
 ### 明确不进入首版
 
@@ -56,7 +58,7 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 
 ## 4. 预览与本地 Office
 
-v0.1 砍掉内置预览，先把“文件进、文件出”做可靠。完成后由系统默认应用打开结果，用户可以使用已安装的 Word、PowerPoint、Preview、WPS 或 LibreOffice 自己查看。
+v0.1 砍掉内置预览，先把“文件进、文件出”做可靠。完成后可由系统默认应用打开，也可以在 Finder/文件管理器中定位，或从系统应用选择器指定 Word、Excel、PowerPoint、WPS、LibreOffice 等软件。
 
 原因很直接：
 
@@ -112,7 +114,7 @@ PageFerry/
 
 ## 7. v0.1 验收标准
 
-- 当前四种可用格式各有一组 golden corpus；Office 文档覆盖表格、页眉页脚、speaker notes、批注关系和复杂字体，纯文本覆盖编码、换行、长文本与 Markdown 保护区。原生文本型 PDF 接入后补齐独立 corpus，再进入首版发布验收。
+- 当前五种可用格式各有一组 golden corpus；Office 文档覆盖表格、页眉页脚、speaker notes、公式、合并单元格、Excel Table、批注关系和复杂字体，纯文本覆盖编码、换行、长文本与 Markdown 保护区。原生文本型 PDF 接入后补齐独立 corpus，再进入首版发布验收。
 - 同一输入与固定 translator stub 能得到结构稳定、可重复比较的输出。
 - 任意失败都不会损坏原文件，并能清理或标识残留 workspace。
 - 应用重启后可以恢复任务历史；没有 durable worker 的阶段，遗留 queued/running 任务都会转成可解释的中断状态。
