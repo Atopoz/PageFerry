@@ -134,6 +134,12 @@ def test_startup_creates_local_data_layout_and_database(tmp_path) -> None:
     """首次启动应创建 app 目录、数据库与可用健康检查。"""
 
     app = create_app(Settings(data_dir=tmp_path))
+    expected_pack = tmp_path / "pdf" / "2026.07.18.1"
+
+    assert app.state.pdf_asset_pack == expected_pack
+    assert app.state.layout_detector.model_path == (
+        expected_pack / "layout" / "PP-DocLayoutV3" / "inference.onnx"
+    )
 
     with TestClient(app) as client:
         response = client.get("/healthz")
@@ -143,7 +149,7 @@ def test_startup_creates_local_data_layout_and_database(tmp_path) -> None:
         "code": "success",
         "data": {"service": "pageferry-api", "version": "0.1.0"},
     }
-    for directory in ("workspace", "outputs", "models", "cache", "logs"):
+    for directory in ("workspace", "outputs", "models", "pdf", "cache", "logs"):
         assert (tmp_path / directory).is_dir()
 
     with sqlite3.connect(tmp_path / "pageferry.sqlite3") as connection:

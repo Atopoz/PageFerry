@@ -113,7 +113,7 @@ function customProviderStatus() {
 function translationJob(
   sourceName = 'sample.docx',
   id = 'job-1',
-  documentType: 'docx' | 'pptx' | 'xlsx' | 'txt' | 'md' = 'docx',
+  documentType: 'docx' | 'pptx' | 'xlsx' | 'txt' | 'md' | 'pdf' = 'docx',
 ): TranslationJob {
   return {
     id,
@@ -367,7 +367,7 @@ describe('App', () => {
         const formData = init.body as FormData;
         const file = formData.get('file') as File;
         const kind = file.name.split('.').at(-1) as
-          'docx' | 'pptx' | 'txt' | 'md';
+          'docx' | 'pptx' | 'xlsx' | 'txt' | 'md' | 'pdf';
         return jsonResponse(translationJob(file.name, 'job-1', kind));
       }
       if (url.endsWith('/api/v1/jobs')) return jsonResponse(initialJobs);
@@ -516,6 +516,32 @@ describe('App', () => {
     ).toBeInTheDocument();
   });
 
+  it.each([
+    ['pdf_no_text_layer', 'PDF 没有可翻译的文本层'],
+    ['pdf_encrypted', 'PDF 已加密，无法读取'],
+    ['pdf_corrupt', 'PDF 文件已损坏或格式无效'],
+    ['pdf_layout_model_missing', '本机缺少 PDF 布局模型'],
+    ['pdf_font_directory_missing', '本机缺少 PDF 字体资源'],
+    ['pdf_font_resource_missing', '本机缺少 PDF 字体资源'],
+    ['pdf_font_prepare_failed', 'PDF 字体资源无法加载'],
+    ['pdf_unsupported', '当前 PDF 类型暂不支持'],
+  ])('为 PDF 失败码 %s 展示稳定文案', async (errorCode, message) => {
+    initialJobs = [
+      {
+        ...translationJob('failed.pdf', `failed-${errorCode}`, 'pdf'),
+        status: 'failed',
+        output_path: null,
+        artifacts: [],
+        error_code: errorCode,
+      },
+    ];
+    render(<App />);
+    await waitForInitialState();
+    fireEvent.click(screen.getByRole('button', { name: '历史记录' }));
+
+    expect(await screen.findByText(`失败 · ${message}`)).toBeInTheDocument();
+  });
+
   it('切换一级页面时保留尚未提交的文件、语言与 API Key', async () => {
     render(<App />);
     await waitForInitialState();
@@ -616,28 +642,38 @@ describe('App', () => {
     ).toHaveTextContent('英语');
   });
 
-  it('支持 XLSX 但拒绝尚未接入的 PDF', async () => {
+  it('支持 PDF 并保持无额外选项的创建 contract', async () => {
     render(<App />);
     await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
-    const unsupportedFile = new File(['content'], 'sample.pdf', {
+    const pdfFile = new File(['content'], 'sample.pdf', {
       type: 'application/pdf',
     });
 
     expect(
-      screen.getByText('DOCX · PPTX · XLSX · TXT · MD'),
+      screen.getByText('DOCX · PPTX · XLSX · TXT · MD · PDF'),
     ).toBeInTheDocument();
     expect(input).toHaveAttribute('tabindex', '-1');
     expect(input).toHaveAttribute('aria-hidden', 'true');
-    expect(screen.queryByText(/PDF/i)).not.toBeInTheDocument();
+    expect(input).toHaveAttribute('accept', '.docx,.pptx,.xlsx,.txt,.md,.pdf');
     fireEvent.change(input as HTMLInputElement, {
-      target: { files: [unsupportedFile] },
+      target: { files: [pdfFile] },
     });
 
-    expect(screen.getByRole('alert')).toHaveTextContent(
-      '仅支持 DOCX、PPTX、XLSX、TXT 与 Markdown。',
-    );
-    expect(screen.queryByRole('button', { name: '开始翻译' })).toBeNull();
+    expect(screen.getByText('sample.pdf')).toBeInTheDocument();
+    expect(screen.getByText('准备就绪')).toBeInTheDocument();
+    expect(screen.queryByText('文件选项')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '开始翻译' }));
+
+    expect(
+      await screen.findByRole('heading', { name: '本次任务' }),
+    ).toBeInTheDocument();
+    const uploadCall = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.find(([url]) => String(url).endsWith('/api/v1/jobs/upload'));
+    const formData = uploadCall?.[1]?.body as FormData;
+    expect(formData.get('file')).toBe(pdfFile);
+    expect(formData.has('options')).toBe(false);
   });
 
   it('DOCX 高级选项进入 upload payload，并只在本次任务区显示结果', async () => {

@@ -33,7 +33,7 @@ import type {
   TranslationJob,
 } from '@/lib/api';
 
-type SupportedDocumentKind = Exclude<DocumentTypeKind, 'pdf'>;
+type SupportedDocumentKind = DocumentTypeKind;
 
 export type PendingDocument =
   | {
@@ -87,6 +87,7 @@ const supportedExtensions = new Set<SupportedDocumentKind>([
   'xlsx',
   'txt',
   'md',
+  'pdf',
 ]);
 
 /** 返回文件名的小写扩展名。 */
@@ -425,7 +426,7 @@ export function TranslationWorkspace({
       filters: [
         {
           name: t('translation.documentFilter'),
-          extensions: ['docx', 'pptx', 'xlsx', 'txt', 'md'],
+          extensions: ['docx', 'pptx', 'xlsx', 'txt', 'md', 'pdf'],
         },
       ],
     });
@@ -565,7 +566,7 @@ export function TranslationWorkspace({
         type="file"
         tabIndex={-1}
         aria-hidden="true"
-        accept=".docx,.pptx,.xlsx,.txt,.md"
+        accept=".docx,.pptx,.xlsx,.txt,.md,.pdf"
         onChange={(event) => {
           selectBrowserFile(event.target.files?.[0]);
           // 清空 DOM value，移除任务后仍可再次选择同一个文件。
@@ -594,7 +595,7 @@ export function TranslationWorkspace({
             </span>
             <strong>{t('translation.dropFile')}</strong>
             <span>{t('translation.chooseFile')}</span>
-            <small>DOCX · PPTX · XLSX · TXT · MD</small>
+            <small>DOCX · PPTX · XLSX · TXT · MD · PDF</small>
           </button>
         </div>
       ) : (

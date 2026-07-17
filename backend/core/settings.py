@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8765
     data_dir: Path | None = None
+    layout_model_path: Path | None = None
+    layout_max_concurrency: int = 1
+    layout_intra_op_threads: int | None = None
     boot_token: SecretStr | None = None
     secret_service_name: str = "com.pageferry.provider-secrets"
     allowed_origins: tuple[str, ...] = (

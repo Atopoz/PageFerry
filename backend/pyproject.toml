@@ -5,16 +5,26 @@ description = "Local document translation service for PageFerry"
 readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
+  "charset-normalizer>=3.4,<4",
+  "cryptography>=45,<47",
   "fastapi>=0.116,<1",
+  "fonttools>=4.59,<5",
   "httpx2>=2,<3",
   "keyring>=25.6,<26",
+  "loguru>=0.7,<1",
   "mistune>=3.2,<4",
+  "numpy>=2.2,<3",
+  "onnxruntime>=1.22,<2",
   "openpyxl>=3.1,<4",
+  "pikepdf>=10,<11",
+  "pillow>=11,<13",
   "platformdirs>=4.3,<5",
+  "pypdfium2>=4.30,<5",
   "pydantic-settings>=2.10,<3",
   "python-docx>=1.2,<2",
   "python-multipart>=0.0.20,<1",
   "python-pptx>=1.0,<2",
+  "rtree>=1.4,<2",
   "tiktoken>=0.11,<1",
   "uvicorn[standard]>=0.35,<1",
 ]
@@ -36,6 +46,18 @@ testpaths = ["tests"]
 [tool.ruff]
 target-version = "py312"
 line-length = 100
+extend-exclude = [
+  "modules/pdf/entities.py",
+  "modules/pdf/extractor.py",
+  "modules/pdf/font_manager.py",
+  "modules/pdf/formatter.py",
+  "modules/pdf/layout_tools.py",
+  "modules/pdf/renderer.py",
+  "modules/pdf/span_line_utils.py",
+  "modules/pdf/table_renderer.py",
+  "modules/pdf/translator.py",
+  "vendor/pdfminerex",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]

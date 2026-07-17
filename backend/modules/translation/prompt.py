@@ -5,7 +5,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-PROMPT_VERSION = "pageferry-translation-v4-joto-parity"
+PROMPT_VERSION = "pageferry-translation-v5"
 
 _TARGET_LANGUAGE_LABELS = {
     "zh": "Simplified Chinese",
@@ -80,6 +80,14 @@ _FORMAT_CONSTRAINTS: dict[str, tuple[str, ...]] = {
         "Return every cell separately and in its original order without commentary.",
         "Keep formulas, URLs, email addresses, paths, identifiers, and numeric values unchanged.",
         "Prefer concise wording that remains readable inside a spreadsheet cell.",
+    ),
+    "pdf": (
+        "Translate only natural-language text inside each [BLOCK_X] entry.",
+        "Keep every [PAGE_X], [BLOCK_X], and <SPAN_X>...</SPAN_X> marker unchanged.",
+        "Return every page, block, and span in its original order without commentary.",
+        "Do not translate text inside images; image pixels are outside this payload.",
+        "Keep URLs, identifiers, measurements, numeric values, and standalone symbols unchanged.",
+        "Prefer concise wording that can fit inside the original PDF text region.",
     ),
 }
 

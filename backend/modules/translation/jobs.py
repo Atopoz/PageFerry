@@ -18,6 +18,7 @@ from modules.translation.contracts import (
     BatchTranslator,
     DocumentKind,
     DocumentPipeline,
+    DocumentPipelineError,
     DocumentTranslationOptions,
     TranslationProgress,
     TranslationRequest,
@@ -31,6 +32,7 @@ SUPPORTED_DOCUMENTS: dict[str, DocumentKind] = {
     ".xlsx": "xlsx",
     ".txt": "txt",
     ".md": "md",
+    ".pdf": "pdf",
 }
 DEFAULT_MAX_SOURCE_BYTES = 200 * 1024 * 1024
 
@@ -72,6 +74,8 @@ class TranslationJobService:
         workspace_dir: Path,
         output_dir: Path,
         pipeline_factory: PipelineFactory | None = None,
+        pdf_layout_detector: object | None = None,
+        pdf_font_directory: Path | None = None,
         max_source_bytes: int = DEFAULT_MAX_SOURCE_BYTES,
     ) -> None:
         """注入持久化、provider 与可测试的 pipeline factory。"""
@@ -80,7 +84,11 @@ class TranslationJobService:
         self._translator_resolver = translator_resolver
         self._workspace_dir = workspace_dir
         self._output_dir = output_dir
-        self._pipeline_factory = pipeline_factory or _build_pipeline
+        self._pipeline_factory = pipeline_factory or partial(
+            _build_pipeline,
+            pdf_layout_detector=pdf_layout_detector,
+            pdf_font_directory=pdf_font_directory,
+        )
         self._max_source_bytes = max_source_bytes
 
     def list_recent(self, limit: int = 30) -> list[JobRecord]:
@@ -203,6 +211,8 @@ class TranslationJobService:
             self._repository.mark_failed(job_id, f"provider_{error.code.value}")
         except (FileNotFoundError, PermissionError):
             self._repository.mark_failed(job_id, "source_unavailable")
+        except DocumentPipelineError as error:
+            self._repository.mark_failed(job_id, error.code)
         except Exception:
             # 只记录 job id 和 traceback; 正文与 API Key 从未进入日志参数。
             logger.exception("Document pipeline failed for job %s", job_id)
@@ -234,6 +244,9 @@ def _build_pipeline(
     document_kind: DocumentKind,
     translator: BatchTranslator,
     options: DocumentTranslationOptions | None,
+    *,
+    pdf_layout_detector: object | None = None,
+    pdf_font_directory: Path | None = None,
 ) -> DocumentPipeline:
     """按 sibling runtime 选择格式实现, 不建立隐藏的万能文档模块。"""
 
@@ -265,6 +278,24 @@ def _build_pipeline(
         from modules.plain_text import PlainTextPipeline
 
         return PlainTextPipeline(document_kind, translator)
+    if document_kind == "pdf":
+        from modules.pdf.errors import PdfPipelineError
+        from modules.pdf.font_manager import PDF_FONT_DIRECTORY_MISSING
+        from modules.pdf.layout import LayoutDetector
+        from modules.pdf.pipeline import PdfPipeline
+
+        if pdf_font_directory is None:
+            raise PdfPipelineError(PDF_FONT_DIRECTORY_MISSING)
+        detector = (
+            pdf_layout_detector
+            if isinstance(pdf_layout_detector, LayoutDetector)
+            else LayoutDetector()
+        )
+        return PdfPipeline(
+            translator,
+            detector,
+            font_directory=pdf_font_directory,
+        )
     raise JobServiceError("unsupported_format", "尚不支持该文件格式。", status_code=400)
 
 

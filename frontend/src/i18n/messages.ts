@@ -56,7 +56,8 @@ const coreZhCNMessages = {
   'translation.bilingual.title': '生成双语版',
   'translation.bilingual.description':
     '翻译一次，同时输出译文版和原文-译文双语版',
-  'translation.unsupportedFile': '仅支持 DOCX、PPTX、XLSX、TXT 与 Markdown。',
+  'translation.unsupportedFile':
+    '仅支持 DOCX、PPTX、XLSX、TXT、Markdown 与原生文本型 PDF。',
   'translation.nativeDropUnavailable': '原生拖放暂时不可用，请点击选择文件。',
   'translation.documentFilter': 'PageFerry 文档',
   'translation.createFailed': '任务创建失败。',
@@ -109,6 +110,13 @@ const coreZhCNMessages = {
   'jobs.error.providerRateLimit': '请求过于频繁',
   'jobs.error.providerNetwork': '模型网络异常',
   'jobs.error.providerProtocol': '模型响应异常',
+  'jobs.error.pdfNoTextLayer': 'PDF 没有可翻译的文本层',
+  'jobs.error.pdfEncrypted': 'PDF 已加密，无法读取',
+  'jobs.error.pdfCorrupt': 'PDF 文件已损坏或格式无效',
+  'jobs.error.pdfLayoutModelMissing': '本机缺少 PDF 布局模型',
+  'jobs.error.pdfFontResourcesMissing': '本机缺少 PDF 字体资源',
+  'jobs.error.pdfFontPrepareFailed': 'PDF 字体资源无法加载',
+  'jobs.error.pdfUnsupported': '当前 PDF 类型暂不支持',
   'jobs.error.incomplete': '任务未完成',
   'jobs.status.fallback': '完成 · {count} 处回退',
   'jobs.status.failed': '失败 · {reason}',
@@ -196,7 +204,7 @@ const coreEnMessages: Record<keyof typeof coreZhCNMessages, string> = {
   'translation.bilingual.description':
     'Translate once and create both translated and source–translation copies',
   'translation.unsupportedFile':
-    'Only DOCX, PPTX, XLSX, TXT, and Markdown are supported.',
+    'Only DOCX, PPTX, XLSX, TXT, Markdown, and native-text PDF are supported.',
   'translation.nativeDropUnavailable':
     'Native drag and drop is unavailable. Click to choose a file instead.',
   'translation.documentFilter': 'PageFerry documents',
@@ -259,6 +267,13 @@ const coreEnMessages: Record<keyof typeof coreZhCNMessages, string> = {
   'jobs.error.providerRateLimit': 'Too many requests',
   'jobs.error.providerNetwork': 'Model network error',
   'jobs.error.providerProtocol': 'Unexpected model response',
+  'jobs.error.pdfNoTextLayer': 'PDF has no translatable text layer',
+  'jobs.error.pdfEncrypted': 'PDF is encrypted and cannot be read',
+  'jobs.error.pdfCorrupt': 'PDF is damaged or invalid',
+  'jobs.error.pdfLayoutModelMissing': 'PDF layout model is missing',
+  'jobs.error.pdfFontResourcesMissing': 'PDF font resources are missing',
+  'jobs.error.pdfFontPrepareFailed': 'PDF font resources could not be loaded',
+  'jobs.error.pdfUnsupported': 'This PDF type is not supported',
   'jobs.error.incomplete': 'Task did not finish',
   'jobs.status.fallback': 'Completed · Fallbacks: {count}',
   'jobs.status.failed': 'Failed · {reason}',

@@ -61,6 +61,14 @@ function jobErrorLabel(errorCode: string, t: Translate): string {
     provider_rate_limit: 'jobs.error.providerRateLimit',
     provider_network: 'jobs.error.providerNetwork',
     provider_protocol: 'jobs.error.providerProtocol',
+    pdf_no_text_layer: 'jobs.error.pdfNoTextLayer',
+    pdf_encrypted: 'jobs.error.pdfEncrypted',
+    pdf_corrupt: 'jobs.error.pdfCorrupt',
+    pdf_layout_model_missing: 'jobs.error.pdfLayoutModelMissing',
+    pdf_font_directory_missing: 'jobs.error.pdfFontResourcesMissing',
+    pdf_font_resource_missing: 'jobs.error.pdfFontResourcesMissing',
+    pdf_font_prepare_failed: 'jobs.error.pdfFontPrepareFailed',
+    pdf_unsupported: 'jobs.error.pdfUnsupported',
   };
   const key = labels[errorCode];
   return key ? t(key) : t('jobs.error.incomplete');

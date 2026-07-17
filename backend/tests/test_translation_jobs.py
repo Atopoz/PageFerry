@@ -11,6 +11,7 @@ from db.sqlite import initialize_database
 from modules.translation.contracts import (
     BatchTranslator,
     DocumentKind,
+    DocumentPipelineError,
     TranslationBatchItem,
     TranslationBatchResult,
     TranslationProgress,
@@ -22,6 +23,7 @@ from modules.translation.jobs import (
     DEFAULT_MAX_SOURCE_BYTES,
     JobServiceError,
     TranslationJobService,
+    _build_pipeline,
 )
 
 
@@ -101,6 +103,23 @@ class CopyPipeline:
         )
 
 
+class StableFailurePipeline:
+    """模拟 PDF runtime 在执行期返回一个可安全持久化的稳定错误码。"""
+
+    document_kind: DocumentKind = "pdf"
+
+    def translate(
+        self,
+        request: TranslationRequest,
+        *,
+        report_progress: TranslationProgressReporter | None = None,
+    ) -> TranslationResult:
+        """不接触正文, 直接返回扫描件边界错误。"""
+
+        del request, report_progress
+        raise DocumentPipelineError("pdf_no_text_layer")
+
+
 class RecordingJobRepository(JobRepository):
     """记录 service 交付的 progress snapshot, 同时复用真实 SQLite 更新。"""
 
@@ -115,6 +134,27 @@ class RecordingJobRepository(JobRepository):
 
         self.progress_snapshots.append(snapshot)
         return super().update_progress(job_id, snapshot)
+
+
+def test_default_pdf_factory_passes_app_data_font_directory(tmp_path: Path) -> None:
+    """默认 PDF factory 必须把 app-data 字体目录交给 pipeline。"""
+
+    from modules.pdf.layout import LayoutDetector
+    from modules.pdf.pipeline import PdfPipeline
+
+    font_directory = tmp_path / "pdf" / "revision" / "fonts"
+    detector = LayoutDetector(tmp_path / "model.onnx", verify_checksum=False)
+
+    pipeline = _build_pipeline(
+        "pdf",
+        IdentityTranslator(),
+        None,
+        pdf_layout_detector=detector,
+        pdf_font_directory=font_directory,
+    )
+
+    assert isinstance(pipeline, PdfPipeline)
+    assert pipeline._font_directory == font_directory.resolve()
 
 
 def _service(
@@ -317,3 +357,50 @@ def test_unsupported_extension_is_rejected_before_job_creation(tmp_path: Path) -
             provider_id="deepseek",
             model_id="deepseek-v4-flash",
         )
+
+
+def test_pdf_extension_is_registered_without_format_options(tmp_path: Path) -> None:
+    """PDF 输入应进入 job registry, 且首版不制造图片翻译或预览选项。"""
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n%%EOF")
+    service = _service(tmp_path)
+
+    job = service.create_path_job(
+        source_path=str(source),
+        source_language="en",
+        target_language="zh-CN",
+        provider_id="deepseek",
+        model_id="deepseek-v4-flash",
+    )
+
+    assert job.document_type == "pdf"
+    assert job.options is None
+
+
+def test_pipeline_error_code_is_persisted_without_becoming_generic_failure(tmp_path: Path) -> None:
+    """格式 runtime 的稳定错误不能被任务层压成 pipeline_failed。"""
+
+    database = tmp_path / "pageferry.sqlite3"
+    initialize_database(database)
+    service = TranslationJobService(
+        JobRepository(database),
+        StubResolver(),
+        workspace_dir=tmp_path / "workspace",
+        output_dir=tmp_path / "outputs",
+        pipeline_factory=lambda _kind, _translator, _options: StableFailurePipeline(),
+    )
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n%%EOF")
+    job = service.create_path_job(
+        source_path=str(source),
+        source_language="en",
+        target_language="zh-CN",
+        provider_id="deepseek",
+        model_id="deepseek-v4-flash",
+    )
+
+    completed = service.run(job.id)
+
+    assert completed.status == "failed"
+    assert completed.error_code == "pdf_no_text_layer"

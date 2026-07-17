@@ -4,7 +4,7 @@
 
 ## 1. 产品定义
 
-PageFerry 是面向个人用户的本地文档翻译客户端：选择原文件，配置语言与模型，等待任务完成，得到一个新文件。它直接复用 JOTO-Translation 当前成熟的文档 pipeline，但不搬企业任务、租户和远程存储外壳，而是建立一套更短、更适合桌面端的产品边界。
+PageFerry 是面向个人用户的本地文档翻译客户端：选择原文件，配置语言与模型，等待任务完成，得到一个新文件。各格式 pipeline 只保留文档翻译所需的抽取、翻译和回写能力，不引入企业任务、租户或远程存储外壳。
 
 首版的核心承诺只有三个：
 
@@ -32,7 +32,7 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 - XLSX 翻译，保护公式、合并单元格与 Excel Table 结构。
 - TXT 翻译。
 - Markdown 翻译，保护代码块、inline code 与链接目标。
-- 原生文本型 PDF 翻译，作为首版后续的独立 pipeline 阶段。
+- 原生文本型 PDF 翻译，使用独立 pipeline 并原样保留内嵌图片。
 - 源语言自动识别和目标语言选择。
 - 随应用版本发布的 provider/model catalog。
 - 五个 preset 常驻列表；每个 provider 配置一个 API Key，检测时由系统自动选定默认模型，用户之后可以调整。
@@ -42,13 +42,13 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 - 每个输出 artifact 可以用系统默认应用打开、在文件夹中定位或选择应用打开。
 - macOS Apple Silicon 安装包作为第一个发布目标。
 
-当前文件选择器、拖放校验和 job 入口接受 DOCX、PPTX、XLSX、TXT、Markdown。PDF 尚未形成端到端能力，不在界面中展示为支持格式。
+当前文件选择器、拖放校验和 job 入口接受 DOCX、PPTX、XLSX、TXT、Markdown、PDF。PDF 只承诺翻译已有文本层；header/footer 与正文一样进入翻译，混合文档中的图片和扫描页保持原样，整份文档没有可用文本时明确失败。
 
 ### 明确不进入首版
 
 - 扫描件或纯图片 PDF。
 - 文档内嵌图片文字翻译。
-- 原项目图像翻译 pipeline。
+- 独立图像翻译 pipeline。
 - 基于生图模型的图片重绘方案。
 - GPU、CUDA、Paddle runtime。
 - DOCX/PPTX/PDF 的内置高保真预览。
@@ -87,7 +87,8 @@ PageFerry/
   pageferry.sqlite3      # 任务与配置元数据
   workspace/<job-id>/   # 可回收的任务中间文件
   outputs/<job-id>/     # 完成后的输出文件
-  models/               # ONNX 模型及版本清单
+  pdf/<pack_revision>/  # 独立安装并跨应用更新复用的 PDF 模型与字体
+  models/               # 其他未来本地模型；PDF 资源不写入这里
   cache/                # 可安全重建的缓存
   logs/                 # 本地诊断日志，不记录文档正文和 API Key
 ```
@@ -114,7 +115,7 @@ PageFerry/
 
 ## 7. v0.1 验收标准
 
-- 当前五种可用格式各有一组 golden corpus；Office 文档覆盖表格、页眉页脚、speaker notes、公式、合并单元格、Excel Table、批注关系和复杂字体，纯文本覆盖编码、换行、长文本与 Markdown 保护区。原生文本型 PDF 接入后补齐独立 corpus，再进入首版发布验收。
+- 六种可用格式分别建立 golden corpus；Office 文档覆盖表格、页眉页脚、speaker notes、公式、合并单元格、Excel Table、批注关系和复杂字体，纯文本覆盖编码、换行、长文本与 Markdown 保护区。PDF corpus 覆盖文本完整性、阅读顺序、header/footer、页面几何、内嵌图片 signature、旋转页面和复杂字体；D950 只作为当前端到端基线，不能代替完整 corpus。
 - 同一输入与固定 translator stub 能得到结构稳定、可重复比较的输出。
 - 任意失败都不会损坏原文件，并能清理或标识残留 workspace。
 - 应用重启后可以恢复任务历史；没有 durable worker 的阶段，遗留 queued/running 任务都会转成可解释的中断状态。

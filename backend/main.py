@@ -22,6 +22,13 @@ from modules.model_catalog.provider_config import (
     SQLiteProviderConfigRepository,
 )
 from modules.model_catalog.secrets import KeyringSecretStore, SecretStore
+from modules.pdf.assets import (
+    find_pdf_asset,
+    load_default_pdf_asset_manifest,
+    pdf_asset_pack_path,
+    pdf_asset_path,
+)
+from modules.pdf.layout import LayoutDetector
 from modules.translation.jobs import TranslationJobService
 
 logger = logging.getLogger(__name__)
@@ -47,11 +54,21 @@ def create_app(
         http_client_factory=http_client_factory,
     )
     job_repository = JobRepository(paths.database)
+    pdf_asset_manifest = load_default_pdf_asset_manifest()
+    pdf_asset_pack = pdf_asset_pack_path(paths.root, pdf_asset_manifest)
+    layout_asset = find_pdf_asset(pdf_asset_manifest, "pp-doclayout-v3-onnx")
+    layout_detector = LayoutDetector(
+        resolved_settings.layout_model_path or pdf_asset_path(pdf_asset_pack, layout_asset),
+        max_concurrency=resolved_settings.layout_max_concurrency,
+        intra_op_threads=resolved_settings.layout_intra_op_threads,
+    )
     translation_job_service = TranslationJobService(
         job_repository,
         provider_config_service,
         workspace_dir=paths.workspace,
         output_dir=paths.outputs,
+        pdf_layout_detector=layout_detector,
+        pdf_font_directory=pdf_asset_pack / "fonts",
     )
 
     @asynccontextmanager
@@ -110,6 +127,9 @@ def create_app(
     application.state.paths = paths
     application.state.provider_config_service = provider_config_service
     application.state.translation_job_service = translation_job_service
+    application.state.layout_detector = layout_detector
+    application.state.pdf_asset_manifest = pdf_asset_manifest
+    application.state.pdf_asset_pack = pdf_asset_pack
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.allowed_origins),

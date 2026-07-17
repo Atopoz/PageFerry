@@ -15,6 +15,7 @@ class AppPaths:
     workspace: Path
     outputs: Path
     models: Path
+    pdf_assets: Path
     cache: Path
     logs: Path
 
@@ -26,6 +27,7 @@ class AppPaths:
             self.workspace,
             self.outputs,
             self.models,
+            self.pdf_assets,
             self.cache,
             self.logs,
         ):
@@ -46,6 +48,7 @@ def resolve_app_paths(data_dir: Path | None = None) -> AppPaths:
         workspace=root / "workspace",
         outputs=root / "outputs",
         models=root / "models",
+        pdf_assets=root / "pdf",
         cache=root / "cache",
         logs=root / "logs",
     )

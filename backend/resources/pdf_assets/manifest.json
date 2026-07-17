@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "pack_id": "pdf-runtime",
+  "pack_revision": "2026.07.18.1",
+  "default_base_url": null,
+  "assets": [
+    {
+      "asset_id": "pp-doclayout-v3-onnx",
+      "pack": "layout",
+      "relative_path": "layout/PP-DocLayoutV3/inference.onnx",
+      "distribution_path": "layout/PP-DocLayoutV3/inference.onnx",
+      "size_bytes": 130502049,
+      "sha256": "45bf71750b00739a41fc209f132eb104a4d6b5bb29483c9078164d8b87cf28ba",
+      "upstream_url": "https://huggingface.co/PaddlePaddle/PP-DocLayoutV3_onnx/resolve/46bbdf188bb0a772c08aed74882ce7e51a8f1ea6/inference.onnx",
+      "source_revision": "46bbdf188bb0a772c08aed74882ce7e51a8f1ea6",
+      "license": "Apache-2.0"
+    },
+    {
+      "asset_id": "noto-sans-regular",
+      "pack": "fonts-common-zh-cn",
+      "relative_path": "fonts/NotoSans-Regular.ttf",
+      "distribution_path": "fonts/NotoSans-Regular.ttf",
+      "size_bytes": 629024,
+      "sha256": "fe8c022f48d8dd29f17b744d16f9346f4357e16f7d4f7be58b000ae7c291b614",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-bold",
+      "pack": "fonts-common-zh-cn",
+      "relative_path": "fonts/NotoSans-Bold.ttf",
+      "distribution_path": "fonts/NotoSans-Bold.ttf",
+      "size_bytes": 630968,
+      "sha256": "13a813c49624ae3ba3c5c6e72c5ebffc4b9e1e6ea32f421c04069b037c6ad431",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-sc-regular",
+      "pack": "fonts-common-zh-cn",
+      "relative_path": "fonts/NotoSansSC-Regular.ttf",
+      "distribution_path": "fonts/NotoSansSC-Regular.ttf",
+      "size_bytes": 10560076,
+      "sha256": "dc71173babc38dfd019912965f2b4b3421fb347ebd854e7b96f64ad63673924a",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-sc-bold",
+      "pack": "fonts-common-zh-cn",
+      "relative_path": "fonts/NotoSansSC-Bold.ttf",
+      "distribution_path": "fonts/NotoSansSC-Bold.ttf",
+      "size_bytes": 10549020,
+      "sha256": "9a38ae0ab28cd5a256f9ea8e00dedc688aac17f7915fcb000572990afa956b96",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-tc-regular",
+      "pack": "fonts-zh-tw",
+      "relative_path": "fonts/NotoSansTC-Regular.ttf",
+      "distribution_path": "fonts/NotoSansTC-Regular.ttf",
+      "size_bytes": 7109460,
+      "sha256": "add35d53f70727657b4509531677c4e3712b67df3d54661efdee5d3a0c16d954",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-tc-bold",
+      "pack": "fonts-zh-tw",
+      "relative_path": "fonts/NotoSansTC-Bold.ttf",
+      "distribution_path": "fonts/NotoSansTC-Bold.ttf",
+      "size_bytes": 7104212,
+      "sha256": "ed4ae6ed781e34d0beee896e9be5d835a938ac7adabbcc1b6b6904290006f372",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-hk-regular",
+      "pack": "fonts-zh-hk",
+      "relative_path": "fonts/NotoSansHK-Regular.ttf",
+      "distribution_path": "fonts/NotoSansHK-Regular.ttf",
+      "size_bytes": 7092092,
+      "sha256": "154ee8273741df924c7c509029478389bc4d91994fc51d5213af158ce09d3efb",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-hk-bold",
+      "pack": "fonts-zh-hk",
+      "relative_path": "fonts/NotoSansHK-Bold.ttf",
+      "distribution_path": "fonts/NotoSansHK-Bold.ttf",
+      "size_bytes": 7086800,
+      "sha256": "9c8bc87430613644fee27cbde7df8b72fd1ae8a6ff3ef8d9a35c4e6cd155b20f",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-jp-regular",
+      "pack": "fonts-ja",
+      "relative_path": "fonts/NotoSansJP-Regular.ttf",
+      "distribution_path": "fonts/NotoSansJP-Regular.ttf",
+      "size_bytes": 5450308,
+      "sha256": "f32915916d2d6f35bb0d3d7ef0784504914bf0235afb02eec552bd14d06d3552",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-jp-bold",
+      "pack": "fonts-ja",
+      "relative_path": "fonts/NotoSansJP-Bold.ttf",
+      "distribution_path": "fonts/NotoSansJP-Bold.ttf",
+      "size_bytes": 5468188,
+      "sha256": "c5b7b9d6a6eb682b0d4e6bbb38509575fd2759a28f147daa74714d1359a7909e",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-kr-regular",
+      "pack": "fonts-ko",
+      "relative_path": "fonts/NotoSansKR-Regular.ttf",
+      "distribution_path": "fonts/NotoSansKR-Regular.ttf",
+      "size_bytes": 6185516,
+      "sha256": "d120ae7d44307155ab593bbbe63e0bb7f5766e00492015e5d69f220092589156",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-kr-bold",
+      "pack": "fonts-ko",
+      "relative_path": "fonts/NotoSansKR-Bold.ttf",
+      "distribution_path": "fonts/NotoSansKR-Bold.ttf",
+      "size_bytes": 6183932,
+      "sha256": "4ffa20c272ae6d689f7c8d34ff9c8039a326e9c334d9fc8852b2a7396227d077",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-bengali-regular",
+      "pack": "fonts-bn",
+      "relative_path": "fonts/NotoSansBengali-Regular.ttf",
+      "distribution_path": "fonts/NotoSansBengali-Regular.ttf",
+      "size_bytes": 137760,
+      "sha256": "13fd1f77da57390fdc62b629bfd02459dd4bb8ee3f3feae2e6694d9bdc529fc1",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-bengali-bold",
+      "pack": "fonts-bn",
+      "relative_path": "fonts/NotoSansBengali-Bold.ttf",
+      "distribution_path": "fonts/NotoSansBengali-Bold.ttf",
+      "size_bytes": 141476,
+      "sha256": "3a44a4cf2c4f79c3ead8f52dffd5b3a66f0b2483792d66bad81e1a51e888bfd6",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-khmer-regular",
+      "pack": "fonts-km",
+      "relative_path": "fonts/NotoSansKhmer-Regular.ttf",
+      "distribution_path": "fonts/NotoSansKhmer-Regular.ttf",
+      "size_bytes": 105696,
+      "sha256": "fff6f415386616d8d99c4f64b876e54e6e231dc0c007c87a61b254b3795957f9",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-khmer-bold",
+      "pack": "fonts-km",
+      "relative_path": "fonts/NotoSansKhmer-Bold.ttf",
+      "distribution_path": "fonts/NotoSansKhmer-Bold.ttf",
+      "size_bytes": 106224,
+      "sha256": "c72f01526f03b16b64a355cc898605c950c0c5bdcef6d00974a8e753358d3a8e",
+      "license": "OFL-1.1"
+    },
+    {
+      "asset_id": "noto-sans-math-regular",
+      "pack": "fonts-common-zh-cn",
+      "relative_path": "fonts/NotoSansMath-Regular.ttf",
+      "distribution_path": "fonts/NotoSansMath-Regular.ttf",
+      "size_bytes": 1004120,
+      "sha256": "b4a1dfdbfa13b4755e5eac20cb25c1d17ed5a745ceb89639595e8cf45a2b1e07",
+      "license": "OFL-1.1"
+    }
+  ]
+}

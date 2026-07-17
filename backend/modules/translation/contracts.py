@@ -10,6 +10,16 @@ TranslationArtifactKind = Literal["translated", "bilingual"]
 TranslationProgressStage = Literal["extracting", "translating", "formatting"]
 
 
+class DocumentPipelineError(RuntimeError):
+    """携带不含正文、路径或 provider 响应的稳定 pipeline 错误码。"""
+
+    def __init__(self, code: str) -> None:
+        """保存允许写入任务状态并展示给 UI 的稳定错误码。"""
+
+        super().__init__(code)
+        self.code = code
+
+
 @dataclass(frozen=True, slots=True)
 class DocumentTranslationOptions:
     """保存创建任务时确定的格式专属 pipeline 选项。"""

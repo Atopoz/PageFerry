@@ -1,6 +1,6 @@
 # 技术架构
 
-> 状态：Active · 轻量格式 pipeline 与桌面端三页信息架构正在收口
+> 状态：Active · 六种文档 pipeline 与桌面端发布边界正在收口
 
 ## 1. 进程拓扑
 
@@ -17,7 +17,7 @@ flowchart LR
 
 开发期固定使用 `127.0.0.1:8765`。发布版由 Tauri 拉起冻结后的 Python sidecar，使用随机可用端口和一次性 boot token；端口和 token 通过受控启动参数传递。CORS 只是浏览器边界，不是本地 API 的身份认证，不能用它代替 token。
 
-当前仓库已实现本地 API、provider 配置、任务 metadata 和五类轻量格式 runtime，但尚未实现 sidecar 冻结与启动管理。开发时 `make backend` 单独启动 uvicorn，`make dev` 由 Tauri 启动 Vite；等 Rust 完成 sidecar 生命周期管理后再合并成单命令。
+当前仓库已实现本地 API、provider 配置、任务 metadata，以及 DOCX、PPTX、XLSX、TXT、Markdown、原生文本型 PDF runtime，但尚未实现 sidecar 冻结与启动管理。开发时 `make backend` 单独启动 uvicorn，`make dev` 由 Tauri 启动 Vite；等 Rust 完成 sidecar 生命周期管理后再合并成单命令。
 
 ## 2. 仓库结构
 
@@ -47,9 +47,11 @@ backend/
     pptx/                  # PPTX runtime，包含 speaker notes
     xlsx/                  # XLSX cell 提取、Table header 同步与结构校验
     plain_text/            # TXT 与 Markdown runtime
+    pdf/                   # 文本型 PDF layout、抽取、翻译、回写与结构校验
     model_catalog/         # provider/model catalog 及其服务适配
   db/                      # SQLite schema、migration 与持久化实现
-  resources/               # 随应用发布的版本化资源
+  vendor/pdfminerex/       # 有独立来源与许可证记录的 PDF 解析 fork
+  resources/               # 随 sidecar 发布的小型 catalog、manifest 与许可证
   tests/
 tauri/                     # Rust crate、Tauri 权限与打包配置
   Cargo.toml
@@ -73,7 +75,7 @@ macOS 主窗口保留系统原生装饰，使用 Tauri `Overlay` titlebar 隐藏
 #### 文件翻译页
 
 - 顶部只放紧凑的源语言、目标语言与已启用模型选择；model picker 不展示未配置、未启用或 probe 失败的模型。翻译语种 selector 的主名称跟随当前 UI locale，本族语名称只在展开列表中作为次级识别信息，选中后的 trigger 仍只显示主名称。
-- 选中文件后，上传区收敛为文件卡。文件卡下方直接铺开紧凑的「文件选项」，不再用 disclosure 隐藏入口；只渲染当前 `document_kind` 已真实支持的开关：DOCX 为翻译表格与生成双语版，PPTX 为翻译表格与 speaker notes。表格和 notes 默认开启，双语版默认关闭；XLSX、TXT、Markdown 当前没有选项时不展示空面板。
+- 选中文件后，上传区收敛为文件卡。文件卡下方直接铺开紧凑的「文件选项」，不再用 disclosure 隐藏入口；只渲染当前 `document_kind` 已真实支持的开关：DOCX 为翻译表格与生成双语版，PPTX 为翻译表格与 speaker notes。表格和 notes 默认开启，双语版默认关闭；XLSX、TXT、Markdown、PDF 当前没有选项时不展示空面板。
 - 文件类型变化或移除文件时重置为对应 module 默认值。创建任务时发送补齐默认值后的 options snapshot，任务开始后不再受 UI 默认值变化影响。
 - 页面任务区只显示当前 renderer session 创建的 job id。任务 polling 可以读取后端任务列表，但渲染前必须用 session id 集合过滤，不能把持久化历史填进文件翻译页。renderer 重启后的旧任务只在历史记录页出现。
 
@@ -99,7 +101,7 @@ macOS 主窗口保留系统原生装饰，使用 Tauri `Overlay` titlebar 隐藏
 
 五个内置 provider 必须使用可辨认的彩色品牌 icon，provider 列表、详情标题与模型行保持同一套视觉映射，不得再用星形字符占位。只有未来无法识别的自定义 provider 才允许使用中性通用图标。
 
-文件选择器、拖放校验和 job API 当前接受 DOCX、PPTX、XLSX、TXT、Markdown。PDF 在独立 pipeline 完成端到端验收前不得进入界面。
+文件选择器、拖放校验和 job API 当前接受 DOCX、PPTX、XLSX、TXT、Markdown、PDF。PDF 入口只代表原生文本型 PDF；扫描件 OCR 和图片翻译不因文件扩展名相同而偷偷进入主路径。
 
 ## 3. 后端依赖方向
 
@@ -118,9 +120,9 @@ api -> modules -> db
 
 ## 4. Pipeline 行为原则
 
-1. DOCX、PPTX、XLSX、TXT、Markdown 的抽取、分段、批处理与回填行为必须由结构回归测试固定；PDF 在首版后续阶段保持独立接入。
+1. DOCX、PPTX、XLSX、TXT、Markdown、PDF 的抽取、分段、批处理与回填行为必须由结构回归测试固定；PDF 保持独立 pipeline，不塞进轻量格式 module。
 2. provider、job、原子落盘与 module 接口保持桌面端边界，不引入企业任务、租户、远程存储或 Celery runtime。
-3. 在 `backend/modules/` 下保持 `plain_text/`、`docx/`、`pptx/`、`xlsx/` 四个独立目录；格式专属规则不挤进共享 `translation/` module。
+3. 在 `backend/modules/` 下保持 `plain_text/`、`docx/`、`pptx/`、`xlsx/`、`pdf/` 五个独立目录；格式专属规则不挤进共享 `translation/` module。PDF 业务文件在 `pdf/` 中平铺，`pdfminerex` 只作为独立 vendor fork 管理。
 4. 非直观结构必须有针对性测试。例如 DOCX 同一 run 内同时存在 `w:tab` 与 `w:t` 时，要翻译文字并保留 tab 的原始位置，不能因为结构标记而漏译整段文字。
 5. PPTX speaker notes 必须保持 slide↔notes relationship，并单独验证 notes 正文确实完成翻译。
 6. 先跑 translator stub 的确定性测试，再接真实模型 endpoint；模型接入不能替代结构回归测试。
@@ -130,7 +132,7 @@ api -> modules -> db
 
 ```python
 class DocumentPipeline(Protocol):
-    document_kind: Literal["docx", "pptx", "xlsx", "txt", "md"]
+    document_kind: Literal["docx", "pptx", "xlsx", "txt", "md", "pdf"]
 
     def translate(
         self,
@@ -161,13 +163,13 @@ class DocumentPipeline(Protocol):
 - 统一归一化记录 input、output、cache read、cache write token；没有 provider usage 证据时不能声称“缓存已命中”。日志只记录计数、模板版本和 hash，不记录正文。
 - 分离消息只是必要条件，不保证命中。还要满足 provider 的前缀匹配、最小长度和有效期规则，因此需要用真实 endpoint 做重复 batch 基准测试。
 
-Prompt snapshot 测试至少覆盖：只改变 segment 时固定 system 不变；相同任务上下文序列化稳定；模板升级会改变明确版本；DOCX、PPTX、XLSX、TXT、Markdown 最终使用同一套 translator prompt contract。
+Prompt snapshot 测试至少覆盖：只改变 segment 时固定 system 不变；相同任务上下文序列化稳定；模板升级会改变明确版本；DOCX、PPTX、XLSX、TXT、Markdown、PDF 最终使用同一套 translator prompt contract。PDF 只把原生文本与结构 marker 放入 payload，图片像素不进入 prompt。
 
 ### Batch 并发与上游保护
 
 翻译吞吐由两层上限共同约束：
 
-- 单 job 默认最多并发 6 个 batch。DOCX、PPTX、XLSX、TXT 与 Markdown 共用有界滑动窗口，运行中与已提交但未完成的 future 总数不超过有效单 job 上限，不为大文档一次性创建无界队列。
+- 单 job 默认最多并发 6 个 batch。DOCX、PPTX、XLSX、TXT、Markdown 与 PDF 共用有界滑动窗口，运行中与已提交但未完成的 future 总数不超过有效单 job 上限，不为大文档一次性创建无界队列。
 - 同一 `provider_id + upstream_model_id` 在整个 sidecar 生命周期内默认最多同时发出 15 个翻译 batch。这个 limiter 是 app-scoped，所有 job 共享；不同 provider 或 upstream model 使用独立预算。
 - 每个已启用 model 可以覆盖两层上限，当前有效单 job 上限不能超过有效共享上限。收紧共享上限时不取消已经在途的请求，它们自然结束；新请求等待新容量。
 
@@ -209,19 +211,28 @@ XLSX 只翻译确认安全的字符串 cell。公式、纯数字/符号、URL、
 
 ### PDF
 
-PDF 尚未进入当前可用格式。首版后续阶段接入原生文本型 PDF 时，文本抽取、阅读顺序、布局分析、翻译和回写必须拆成可测试阶段；在端到端验收通过前，不接入文件选择器或 job API。
+PDF 只翻译已有的原生文本层，文本抽取、阅读顺序、布局分析、翻译、回写和发布校验分别保持可测试。正文、标题、表格文本、header 与 footer 使用同一翻译 contract；header/footer 保留模型 label，不根据页面高度二次猜测，也不为某份样例加入坐标阈值。
 
-图像翻译 pipeline 整体移出首版。未来基于生图模型的方案单独立项，不与文档文字 pipeline 共用含糊 contract。
+页面光栅图只作为 layout inference 输入，不进入输出 PDF；runtime 逐页完成光栅化和 inference 后立即释放该页图像，不缓存整份文档。内嵌 Image XObject 不进入翻译 payload，也不做 OCR、擦除、模糊或重绘；没有可见原生文字的全幅扫描页使整个任务以 `pdf_no_text_layer` 失败，`Tr 3/7` 或 ExtGState alpha 隐藏的 OCR/search layer 不参与翻译或可见重绘。renderer 只改文本内容流，并且只在字体资源全部准备成功后清除待替换文字；字体或译文 stream 失败时不生成结果。发布前递归记录并比较 page/Form resources 中每个 Image XObject 的尺寸、位深与 decoded hash，同时比较页面几何和源文件 hash。输出写到最终目录中的临时文件，校验成功并 `fsync` 后才用 `os.replace` 原子发布。
+
+整份文档没有可见原生文本，或混合文档包含没有可见文字的全幅扫描页时，返回 `pdf_no_text_layer`；加密、损坏、模型缺失和格式错误分别返回稳定 code。模型已通过完整性检查但 layout inference 失败时，extractor 使用空 layout 继续走 `pdfminerex` 文本框 fallback，并返回 `pdf_layout_fallback` warning。单个翻译 chunk 的 marker、非空回填校验或 provider 调用失败时只保留该 chunk 原文并返回 `pdf_chunk_fallback`，不能让局部失败损坏整份结果。
+
+`backend/modules/pdf/` 直接保存 PDF 业务实现，不增加来源项目名称的子目录。`backend/vendor/pdfminerex/` 作为有独立来源、许可证和 notices 的 vendor fork 管理；这个边界只用于供应链证据，不进入产品命名或 runtime namespace。详细 contract 与实验数据见 [PDF 翻译](./pdf-translation.md)。
+
+图像翻译 pipeline 整体移出首版。未来 OCR 或基于生图模型的方案必须单独立项，不与文本型 PDF pipeline 共用含糊 contract。
 
 ## 6. Layout 与 OCR
 
 - 不引入 Paddle runtime、GPU 或 CUDA。
-- Layout 保留 PP-DocLayoutV2 模型家族可用的 label/输出 contract，先完成导出模型在 ONNX Runtime CPU 上的等价性 spike。
-- spike 必须比较输入预处理、输出 tensor、NMS、label 映射、坐标还原、速度、内存与平台 wheel 可用性；不能只证明“模型能跑”。
+- Layout 使用 PP-DocLayoutV3 官方 ONNX artifact 与 ONNX Runtime `CPUExecutionProvider`。manifest 固定 source revision、130,502,049 bytes、SHA-256、tensor 与 label contract。
+- adapter 按官方 export contract 生成 800 × 800 RGB/NCHW float32 输入，只读取矩形候选和候选数 tensor，再执行 label threshold、overlap filter 与坐标还原。instance mask 不进入文本型 PDF pipeline。
+- ONNX session 为 app-scoped lazy singleton；单份文档按 `batch_size=1` 顺序推理，跨 job 默认一个受控 slot，单次 inference 默认最多 4 个 intra-op thread，避免一个 PDF 抢满桌面 CPU。
+- D950 前 10 页与远程 V2 参考结果的共同匹配框平均 IoU 为 0.947；V2 的 74 个 `inline_formula` 误判在 V3 中消失。V3 比 V2 多一个 `footer` 只属于单样例 label 差异，不构成“V3 普遍有更多 footer”的证据。
+- V3 是当前唯一 runtime baseline。若更大 corpus 证明存在系统性回归，再以量化结果替换模型；不同时维护 V2/V3 双模型，不按文件猜测切换，也不加入 D950 专用启发式。
 - OCR 属于扫描件里程碑，候选方案必须是 ONNX Runtime 路径，并有 0/90/180/270 页面方向、0/180 行方向和轻微 skew 测试。
-- 模型包独立版本化并校验 checksum，不把数百 MB 权重直接塞进 Git。
+- PDF 模型与字体使用同一 canonical resource-pack manifest，安装到 app-data 的版本化 `pdf/<pack_revision>/`；模型权重和 TTF 都不进入 Git 或 Tauri app bundle。layout、简中基础字体及其他语种字体是独立选择 group，只有明确安装操作可以下载，翻译任务 runtime 不联网。`scripts/sync-pdf-assets.py` 提供构建与开发同步，旧 `sync-layout-model.py` 只保留兼容入口。
 
-为了避免 PDF 接入后返工，Layout ONNX spike 放在 PDF 完整实现之前；若 spike 不通过，先收窄 PDF 能力，不把 Paddle 偷偷带回客户端。
+模型缺失或 checksum 不符时，PDF 任务在页面光栅化前返回 `pdf_layout_model_missing`。字体目录、单个字体或字体准备失败分别返回稳定 code，并且都发生在删除源文字之前。正式发布还需完成有进度、取消、重试和磁盘空间提示的安装 UI，以及 PageFerry 自有 CDN；clean-room 验收必须覆盖 app 更新后已安装 pack 仍可复用。
 
 ## 7. SQLite 与文件系统
 
@@ -290,7 +301,7 @@ model discovery 只产生候选列表：先返回 `source: "catalog"` 的 bundle
 3. 产物命名为 `tauri/binaries/pageferry-backend-$TARGET_TRIPLE`，例如 `pageferry-backend-aarch64-apple-darwin`；Windows 追加 `.exe`。
 4. Tauri `externalBin` 只声明逻辑路径 `binaries/pageferry-backend`，并收入必要资源。
 5. Rust 持有唯一 child handle，解析 stdout 的 JSON ready handshake，向 UI 提供实际端口；退出时先请求优雅关闭，再回收进程。
-6. 首次启动创建用户数据目录，模型按 manifest 下载或随安装包分层提供。
+6. 首次启动创建用户数据目录；PDF 模型与字体通过明确的安装步骤按 manifest 写入 app-data，不进入 `.app`，普通任务 runtime 不触发下载。
 7. 完成签名、公证、升级和卸载残留策略。
 
 `tauri/binaries/` 只跟踪 `.gitkeep`，禁止提交本机编译产物。CI 必须在目标操作系统上先构建匹配 target triple 的 sidecar，再执行 Tauri build；不能拿一个平台的 Python 可执行文件跨平台复用。
