@@ -1,3 +1,5 @@
+/** 封装 React renderer 与本地 FastAPI sidecar 之间的窄 HTTP contract。 */
+
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8765';
 
@@ -13,26 +15,372 @@ export interface ProviderDefinition {
   id: string;
   display_name: string;
   protocol: 'openai' | 'anthropic' | 'gemini' | 'custom';
+  available: boolean;
+  base_url_editable: boolean;
+  supports_model_sync?: boolean;
+  default_base_url?: string | null;
+  docs_url?: string | null;
+  api_key_url?: string | null;
+}
+
+export interface ModelDefinition {
+  id: string;
+  display_name: string;
+  capabilities: string[];
+}
+
+export interface ProviderModelDefinition {
+  provider_id: string;
+  model_id: string;
+  upstream_model_id: string;
+  enabled_by_default: boolean;
 }
 
 export interface ModelCatalog {
   schema_version: number;
   catalog_version: string;
   providers: ProviderDefinition[];
+  models: ModelDefinition[];
+  provider_models: ProviderModelDefinition[];
 }
 
-async function requestJson<T>(path: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, { signal });
-  if (!response.ok) {
-    throw new Error(`Local API returned ${response.status}`);
+export type ProbeStatus =
+  'not_configured' | 'not_tested' | 'succeeded' | 'failed';
+
+export interface ProviderStatus {
+  provider_id: string;
+  display_name: string;
+  protocol: 'openai' | 'anthropic' | 'gemini' | 'custom';
+  is_custom: boolean;
+  base_url: string;
+  base_url_overridden: boolean;
+  base_url_editable: boolean;
+  deletable: boolean;
+  available: boolean;
+  configured: boolean;
+  supports_model_sync: boolean;
+  enabled_model_ids: string[];
+  default_model_id: string | null;
+  model_count: number;
+  models: ProviderModelStatus[];
+  probe_status: ProbeStatus;
+  probe_error_code: string | null;
+  latency_ms: number | null;
+  last_probed_at: string | null;
+  last_synced_at: string | null;
+}
+
+export interface ConfigureProviderInput {
+  api_key?: string;
+  base_url?: string | null;
+  enabled_model_ids: string[];
+  default_model_id: string | null;
+}
+
+export interface CreateCustomProviderInput {
+  display_name: string;
+  base_url: string;
+}
+
+export interface ProviderModelStatus {
+  id: string;
+  display_name?: string;
+  source: 'remote' | 'catalog';
+  available?: boolean;
+  enabled?: boolean;
+  probe_status?: ProbeStatus;
+  latency_ms?: number | null;
+}
+
+export interface ProviderModelDiscovery {
+  models: ProviderModelStatus[];
+  synced_at?: string | null;
+}
+
+export type JobStatus =
+  'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export type JobProgressStage = 'extracting' | 'translating' | 'formatting';
+
+export interface TranslationJob {
+  id: string;
+  source_name: string;
+  document_type: 'docx' | 'pptx' | 'txt' | 'md' | 'pdf';
+  status: JobStatus;
+  progress: number;
+  progress_stage: JobProgressStage;
+  processed_segments: number;
+  total_segments: number;
+  provider_id: string;
+  model_id: string;
+  source_language: string | null;
+  target_language: string;
+  output_path: string | null;
+  error_code: string | null;
+  translated_segments: number;
+  fallback_segments: number;
+  warning_codes: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export type DocumentTranslationOptions =
+  | {
+      kind: 'docx';
+      translate_tables: boolean;
+    }
+  | {
+      kind: 'pptx';
+      translate_tables: boolean;
+      translate_notes: boolean;
+    };
+
+interface RequestOptions {
+  method?: 'GET' | 'POST' | 'PUT' | 'DELETE';
+  body?: BodyInit;
+  headers?: HeadersInit;
+  signal?: AbortSignal;
+}
+
+interface ProviderStatusWire extends Partial<ProviderStatus> {
+  provider_id?: string;
+  model_id?: string | null;
+}
+
+/** 保留稳定错误码，供设置面板把技术错误翻译成可操作的提示。 */
+export class ApiError extends Error {
+  readonly code: string | null;
+  readonly status: number;
+
+  /** 创建一个不包含上游响应正文或密钥信息的 UI 错误。 */
+  constructor(message: string, status: number, code: string | null = null) {
+    super(message);
+    this.name = 'ApiError';
+    this.code = code;
+    this.status = status;
   }
+}
+
+/** 判断未知 JSON 是否为可安全索引的对象。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 同时兼容直接 payload 与 `{data: payload}` 两种窄响应。 */
+function unwrapData<T>(payload: unknown): T {
+  if (isRecord(payload) && 'data' in payload) {
+    return payload.data as T;
+  }
+  return payload as T;
+}
+
+/** 从 FastAPI detail 或 provider 顶层错误体中读取稳定、无敏感信息的错误。 */
+function readError(payload: unknown): {
+  code: string | null;
+  message: string | null;
+} {
+  if (!isRecord(payload)) return { code: null, message: null };
+  const detail = payload.detail;
+  if (typeof detail === 'string') return { code: null, message: detail };
+  const body = isRecord(detail) ? detail : payload;
+  return {
+    code: typeof body.code === 'string' ? body.code : null,
+    message: typeof body.message === 'string' ? body.message : null,
+  };
+}
+
+/** 请求 JSON，并正确处理 provider 的顶层错误体与 204 空响应。 */
+async function requestJson<T>(
+  path: string,
+  options: RequestOptions = {},
+): Promise<T> {
+  const response = await fetch(`${API_BASE_URL}${path}`, options);
+  if (!response.ok) {
+    const payload: unknown = await response.json().catch(() => null);
+    const error = readError(payload);
+    throw new ApiError(
+      error.message ?? `本地服务返回 ${response.status}`,
+      response.status,
+      error.code,
+    );
+  }
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
-export function getHealth(signal: AbortSignal): Promise<HealthResponse> {
-  return requestJson<HealthResponse>('/healthz', signal);
+/** 把 provider 的最小状态补齐成 UI 可直接消费的稳定结构。 */
+function normalizeProviderStatus(
+  value: ProviderStatusWire,
+): ProviderStatus | null {
+  if (!value.provider_id) return null;
+  const probeStatus = value.probe_status ?? 'not_tested';
+  const isCustom = value.is_custom ?? value.provider_id.startsWith('custom-');
+  const defaultModelId = value.default_model_id ?? value.model_id ?? null;
+  const enabledModelIds = Array.isArray(value.enabled_model_ids)
+    ? value.enabled_model_ids.filter(
+        (modelId): modelId is string => typeof modelId === 'string',
+      )
+    : defaultModelId
+      ? [defaultModelId]
+      : [];
+  return {
+    provider_id: value.provider_id,
+    display_name: value.display_name ?? value.provider_id,
+    protocol: value.protocol ?? 'openai',
+    is_custom: isCustom,
+    base_url: value.base_url ?? '',
+    base_url_overridden: value.base_url_overridden ?? false,
+    base_url_editable: value.base_url_editable ?? false,
+    deletable: value.deletable ?? isCustom,
+    available: value.available ?? true,
+    configured: value.configured ?? probeStatus === 'succeeded',
+    supports_model_sync: value.supports_model_sync ?? false,
+    enabled_model_ids: enabledModelIds,
+    default_model_id: defaultModelId,
+    model_count: value.model_count ?? enabledModelIds.length,
+    models: Array.isArray(value.models) ? value.models : [],
+    probe_status: probeStatus,
+    probe_error_code: value.probe_error_code ?? null,
+    latency_ms: value.latency_ms ?? null,
+    last_probed_at: value.last_probed_at ?? null,
+    last_synced_at: value.last_synced_at ?? null,
+  };
 }
 
-export function getModelCatalog(signal: AbortSignal): Promise<ModelCatalog> {
-  return requestJson<ModelCatalog>('/api/v1/model-catalog', signal);
+/** 创建一个只使用 OpenAI-compatible 协议的自定义 provider 定义。 */
+export async function createCustomProvider(
+  input: CreateCustomProviderInput,
+): Promise<ProviderStatus> {
+  const payload = await requestJson<unknown>('/api/v1/providers/custom', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const normalized = normalizeProviderStatus(
+    unwrapData<ProviderStatusWire>(payload),
+  );
+  if (normalized === null) {
+    throw new ApiError('自定义供应商返回了无效状态。', 502, 'protocol');
+  }
+  return normalized;
+}
+
+/** 读取 sidecar 健康状态与版本。 */
+export function getHealth(signal?: AbortSignal): Promise<HealthResponse> {
+  return requestJson<HealthResponse>('/healthz', { signal });
+}
+
+/** 读取随当前应用版本发布的 provider/model catalog。 */
+export async function getModelCatalog(
+  signal?: AbortSignal,
+): Promise<ModelCatalog> {
+  const payload = await requestJson<unknown>('/api/v1/model-catalog', {
+    signal,
+  });
+  return unwrapData<ModelCatalog>(payload);
+}
+
+/** 读取 provider 的 Keychain 配置与最近 probe 状态，不返回密钥。 */
+export async function getProviderStatuses(
+  signal?: AbortSignal,
+): Promise<ProviderStatus[]> {
+  const payload = await requestJson<unknown>('/api/v1/providers', { signal });
+  const values = unwrapData<ProviderStatusWire[]>(payload);
+  if (!Array.isArray(values)) return [];
+  return values.flatMap((value) => {
+    const normalized = normalizeProviderStatus(value);
+    return normalized === null ? [] : [normalized];
+  });
+}
+
+/** 运行真实最小推理检测，成功后保存 provider 配置。 */
+export async function configureProvider(
+  providerId: string,
+  input: ConfigureProviderInput,
+): Promise<ProviderStatus> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${providerId}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  const normalized = normalizeProviderStatus(
+    unwrapData<ProviderStatusWire>(payload),
+  );
+  if (normalized === null) {
+    throw new ApiError('模型服务返回了无效状态。', 502, 'protocol');
+  }
+  return normalized;
+}
+
+/** 使用新输入的密钥或已有 Keychain 密钥读取 provider 模型列表，不持久化密钥。 */
+export async function discoverProviderModels(
+  providerId: string,
+  input: { api_key?: string; base_url?: string | null } = {},
+): Promise<ProviderModelDiscovery> {
+  const payload = await requestJson<unknown>(
+    `/api/v1/providers/${providerId}/models/discover`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    },
+  );
+  return unwrapData<ProviderModelDiscovery>(payload);
+}
+
+/** 删除 provider metadata，并同步删除对应 Keychain secret。 */
+export function deleteProvider(providerId: string): Promise<void> {
+  return requestJson<void>(`/api/v1/providers/${providerId}`, {
+    method: 'DELETE',
+  });
+}
+
+/** 读取最近任务，供工作台与短轮询刷新使用。 */
+export async function getJobs(signal?: AbortSignal): Promise<TranslationJob[]> {
+  const payload = await requestJson<unknown>('/api/v1/jobs', { signal });
+  const jobs = unwrapData<TranslationJob[]>(payload);
+  return Array.isArray(jobs) ? jobs : [];
+}
+
+/** 使用 Tauri 文件对话框返回的本地路径创建任务。 */
+export async function createPathJob(input: {
+  source_path: string;
+  source_language: string | null;
+  target_language: string;
+  provider_id: string;
+  model_id: string;
+  options?: DocumentTranslationOptions;
+}): Promise<TranslationJob> {
+  const payload = await requestJson<unknown>('/api/v1/jobs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  return unwrapData<TranslationJob>(payload);
+}
+
+/** 在普通浏览器开发模式下，经 localhost 上传文件并创建任务。 */
+export async function createUploadJob(input: {
+  file: File;
+  source_language: string | null;
+  target_language: string;
+  provider_id: string;
+  model_id: string;
+  options?: DocumentTranslationOptions;
+}): Promise<TranslationJob> {
+  const body = new FormData();
+  body.append('file', input.file);
+  body.append('source_language', input.source_language ?? 'auto');
+  body.append('target_language', input.target_language);
+  body.append('provider_id', input.provider_id);
+  body.append('model_id', input.model_id);
+  if (input.options) body.append('options', JSON.stringify(input.options));
+  const payload = await requestJson<unknown>('/api/v1/jobs/upload', {
+    method: 'POST',
+    body,
+  });
+  return unwrapData<TranslationJob>(payload);
 }

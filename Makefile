@@ -12,7 +12,7 @@ setup:
 	npm --prefix $(FRONTEND_DIR) ci
 
 backend:
-	PAGEFERRY_DATA_DIR="$(DATA_DIR)" uv run --directory $(BACKEND_DIR) uvicorn main:app --reload --host 127.0.0.1 --port 8765
+	PAGEFERRY_DATA_DIR="$(DATA_DIR)" PAGEFERRY_SECRET_SERVICE_NAME="com.pageferry.provider-secrets.dev" uv run --directory $(BACKEND_DIR) uvicorn main:app --reload --host 127.0.0.1 --port 8765
 
 frontend:
 	npm --prefix $(FRONTEND_DIR) run dev

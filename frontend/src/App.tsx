@@ -1,216 +1,315 @@
-import { useEffect, useId, useState } from 'react';
+/** 组装 PageFerry 桌面壳、三个一级页面与本地任务轮询。 */
 
-import { Button } from '@/components/ui/button';
+import { AlertTriangle } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
-import logoUrl from './assets/logo.svg';
-import { getHealth, getModelCatalog, type ProviderDefinition } from './lib/api';
+import { HistoryPage } from './features/history/HistoryPage';
+import {
+  AppSidebar,
+  type AppRoute,
+  type ServiceState,
+} from './features/navigation/AppSidebar';
+import { AppTitlebar } from './features/navigation/AppTitlebar';
+import { detectDesktopPlatform } from './features/navigation/desktop-platform';
+import { ProviderPage } from './features/providers/ProviderPage';
+import {
+  type StartTranslationInput,
+  TranslationWorkspace,
+} from './features/translation/TranslationWorkspace';
+import {
+  configureProvider,
+  createCustomProvider,
+  createPathJob,
+  createUploadJob,
+  deleteProvider,
+  getHealth,
+  getJobs,
+  getModelCatalog,
+  getProviderStatuses,
+  type ConfigureProviderInput,
+  type CreateCustomProviderInput,
+  type ModelCatalog,
+  type ProviderStatus,
+  type TranslationJob,
+} from './lib/api';
 import './App.css';
 
-type ServiceState = 'checking' | 'connected' | 'offline';
-
-const supportedExtensions = new Set(['docx', 'pptx', 'pdf']);
-
-function extensionOf(fileName: string): string {
-  return fileName.split('.').at(-1)?.toLowerCase() ?? '';
+/** 把新任务插到列表顶部，并替换后端刷新返回的同 id 快照。 */
+function upsertJob(
+  jobs: TranslationJob[],
+  next: TranslationJob,
+): TranslationJob[] {
+  return [next, ...jobs.filter((job) => job.id !== next.id)];
 }
 
+/** 把 provider 状态按 id 合并，保留 catalog 顺序和未来扩展空间。 */
+function upsertProvider(
+  providers: ProviderStatus[],
+  next: ProviderStatus,
+): ProviderStatus[] {
+  const exists = providers.some(
+    (provider) => provider.provider_id === next.provider_id,
+  );
+  if (!exists) return [...providers, next];
+  return providers.map((provider) =>
+    provider.provider_id === next.provider_id ? next : provider,
+  );
+}
+
+/**
+ * 在 DELETE 已成功而列表刷新失败时，本地完成同一状态转换。
+ *
+ * custom provider 从列表移除；preset 则保留入口但清空凭据相关状态，确保翻译页不会
+ * 继续提供已经停用的模型。
+ */
+function applyDeletedProvider(
+  providers: ProviderStatus[],
+  providerId: string,
+): ProviderStatus[] {
+  const deleted = providers.find(
+    (provider) => provider.provider_id === providerId,
+  );
+  if (deleted?.is_custom) {
+    return providers.filter((provider) => provider.provider_id !== providerId);
+  }
+  return providers.map((provider) =>
+    provider.provider_id === providerId
+      ? {
+          ...provider,
+          configured: false,
+          enabled_model_ids: [],
+          default_model_id: null,
+          model_count: provider.models.length,
+          models: provider.models.map((model) => ({
+            ...model,
+            enabled: false,
+          })),
+          probe_status: 'not_configured',
+          probe_error_code: null,
+          latency_ms: null,
+          last_probed_at: null,
+          last_synced_at: null,
+        }
+      : provider,
+  );
+}
+
+/** 将初始化阶段的未知异常压缩成一条不泄露本地路径的提示。 */
+function loadErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.name === 'AbortError') return '';
+  return '部分本地数据暂时不可用，请确认 sidecar 已启动。';
+}
+
+/** PageFerry 的唯一主窗口。 */
 export function App() {
-  const fileInputId = useId();
+  const [activeRoute, setActiveRoute] = useState<AppRoute>('translate');
   const [serviceState, setServiceState] = useState<ServiceState>('checking');
   const [serviceVersion, setServiceVersion] = useState('');
-  const [providers, setProviders] = useState<ProviderDefinition[]>([]);
-  const [selectedProvider, setSelectedProvider] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [notice, setNotice] = useState(
-    '文档只在本机处理，不会上传到 PageFerry 服务器。',
-  );
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [jobs, setJobs] = useState<TranslationJob[]>([]);
+  const [sessionJobIds, setSessionJobIds] = useState<string[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    Promise.all([
-      getHealth(controller.signal),
-      getModelCatalog(controller.signal),
-    ])
-      .then(([health, catalog]) => {
-        setServiceState('connected');
-        setServiceVersion(health.data.version);
-        setProviders(catalog.providers);
-        setSelectedProvider(
-          (current) => current || catalog.providers.at(0)?.id || '',
-        );
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setServiceState('offline');
-        }
-      });
+    /** 并行读取四个独立 endpoint，避免模型和任务请求形成启动瀑布。 */
+    async function loadInitialState() {
+      const results = await Promise.allSettled([
+        getHealth(controller.signal),
+        getModelCatalog(controller.signal),
+        getProviderStatuses(controller.signal),
+        getJobs(controller.signal),
+      ]);
+      if (controller.signal.aborted) return;
 
+      const [healthResult, catalogResult, providerResult, jobsResult] = results;
+      if (healthResult.status === 'fulfilled') {
+        setServiceState('connected');
+        setServiceVersion(healthResult.value.data.version);
+      } else {
+        setServiceState('offline');
+      }
+      if (catalogResult.status === 'fulfilled') setCatalog(catalogResult.value);
+      if (providerResult.status === 'fulfilled') {
+        setProviders(providerResult.value);
+      }
+      if (jobsResult.status === 'fulfilled') setJobs(jobsResult.value);
+
+      const firstFailure = results.find(
+        (result) => result.status === 'rejected',
+      );
+      if (firstFailure?.status === 'rejected') {
+        const message = loadErrorMessage(firstFailure.reason);
+        if (message) setLoadError(message);
+      }
+    }
+
+    void loadInitialState();
     return () => controller.abort();
   }, []);
 
-  function selectFile(file: File | undefined) {
-    if (file === undefined) {
-      return;
+  const hasActiveJobs = jobs.some(
+    (job) => job.status === 'queued' || job.status === 'running',
+  );
+
+  useEffect(() => {
+    if (!hasActiveJobs) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    let disposed = false;
+
+    /** 完成一次请求后再排下一次，避免慢请求在 interval 中重叠。 */
+    async function pollJobs() {
+      try {
+        const next = await getJobs(controller.signal);
+        if (!disposed) setJobs(next);
+      } catch (error) {
+        if (!disposed && loadErrorMessage(error)) {
+          setLoadError('任务状态暂时无法刷新。');
+        }
+      } finally {
+        if (!disposed) timer = window.setTimeout(pollJobs, 1400);
+      }
     }
-    if (!supportedExtensions.has(extensionOf(file.name))) {
-      setSelectedFile(null);
-      setNotice('暂时只接受 DOCX、PPTX 和文本型 PDF。');
-      return;
-    }
-    setSelectedFile(file);
-    setNotice('文件已就位。当前骨架尚未接入翻译 pipeline，不会改写原文件。');
+
+    timer = window.setTimeout(pollJobs, 700);
+    return () => {
+      disposed = true;
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [hasActiveJobs]);
+
+  /** 根据来源是 Tauri path 还是浏览器 File，调用对应创建 endpoint。 */
+  async function startTranslation(input: StartTranslationInput) {
+    const common = {
+      source_language: input.sourceLanguage,
+      target_language: input.targetLanguage,
+      provider_id: input.providerId,
+      model_id: input.modelId,
+      ...(input.options ? { options: input.options } : {}),
+    };
+    const job =
+      input.document.source === 'path'
+        ? await createPathJob({
+            ...common,
+            source_path: input.document.path,
+          })
+        : await createUploadJob({
+            ...common,
+            file: input.document.file,
+          });
+    setJobs((current) => upsertJob(current, job));
+    setSessionJobIds((current) =>
+      current.includes(job.id) ? current : [job.id, ...current],
+    );
+    setLoadError(null);
   }
 
+  /** 保存任意 provider 的启用模型集合，并合并后端权威状态。 */
+  async function saveProvider(
+    providerId: string,
+    input: ConfigureProviderInput,
+  ) {
+    const next = await configureProvider(providerId, input);
+    setProviders((current) => upsertProvider(current, next));
+    return next;
+  }
+
+  /** 创建 custom provider，并让翻译页与设置页共享同一份状态。 */
+  async function addCustomProvider(input: CreateCustomProviderInput) {
+    const next = await createCustomProvider(input);
+    setProviders((current) => upsertProvider(current, next));
+    return next;
+  }
+
+  /** 删除成功后优先刷新权威列表；刷新失败则使用等价的本地状态收敛。 */
+  async function removeProvider(providerId: string) {
+    await deleteProvider(providerId);
+    try {
+      const next = await getProviderStatuses();
+      setProviders(next);
+    } catch {
+      // DELETE 已落地，不能把后续 GET 故障误报成删除失败或继续展示 stale 配置。
+      setProviders((current) => applyDeletedProvider(current, providerId));
+    }
+  }
+
+  /** 在品牌行的固定锚点切换侧栏宽度。 */
+  function toggleSidebar() {
+    setSidebarCollapsed((current) => !current);
+  }
+
+  const sessionJobIdSet = new Set(sessionJobIds);
+  const sessionJobs = jobs.filter((job) => sessionJobIdSet.has(job.id));
+  const configuredProviderCount = providers.filter(
+    (provider) => provider.configured,
+  ).length;
   const serviceLabel = {
-    checking: '正在连接本地服务',
-    connected: `本地服务已连接${serviceVersion ? ` · v${serviceVersion}` : ''}`,
-    offline: '本地服务未启动',
+    checking: '正在连接',
+    connected: serviceVersion ? `v${serviceVersion}` : 'PageFerry',
+    offline: '服务离线',
   }[serviceState];
+  const desktopPlatform = detectDesktopPlatform(window.navigator.userAgent);
 
   return (
-    <div className="app-frame">
-      <header className="topbar">
-        <div className="brand" aria-label="PageFerry">
-          <img className="brand-mark" src={logoUrl} alt="" aria-hidden="true" />
-          <span>PageFerry</span>
-        </div>
-        <div
-          className={`service-state service-state--${serviceState}`}
-          role="status"
-        >
-          <span className="service-dot" aria-hidden="true" />
-          {serviceLabel}
-        </div>
-      </header>
+    <div
+      className={`app-shell ${sidebarCollapsed ? 'app-shell--sidebar-collapsed' : ''}`}
+      data-platform={desktopPlatform}
+    >
+      <AppTitlebar platform={desktopPlatform} />
 
-      <main className="main-content">
-        <section className="intro" aria-labelledby="page-title">
-          <p className="eyebrow">LOCAL DOCUMENT TRANSLATION</p>
-          <h1 id="page-title">把版式留在原处，只让语言过河。</h1>
-          <p>
-            面向个人的本地文档翻译工具。首版聚焦 DOCX、PPTX 与文本型
-            PDF，文件进，文件出。
-          </p>
-        </section>
+      <AppSidebar
+        activeRoute={activeRoute}
+        collapsed={sidebarCollapsed}
+        configuredProviderCount={configuredProviderCount}
+        serviceState={serviceState}
+        serviceLabel={serviceLabel}
+        onNavigate={setActiveRoute}
+        onToggleCollapsed={toggleSidebar}
+      />
 
-        <section className="translation-workspace" aria-label="新建翻译任务">
-          <div className="document-column">
-            <div className="section-heading">
-              <div>
-                <p className="step-label">01 / 文档</p>
-                <h2>选择要翻译的文件</h2>
-              </div>
-              <span>最大体积将在 pipeline 接入时确定</span>
-            </div>
-
-            <label
-              className={`drop-zone ${isDragging ? 'drop-zone--active' : ''}`}
-              htmlFor={fileInputId}
-              onDragEnter={(event) => {
-                event.preventDefault();
-                setIsDragging(true);
-              }}
-              onDragOver={(event) => event.preventDefault()}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault();
-                setIsDragging(false);
-                selectFile(event.dataTransfer.files[0]);
-              }}
-            >
-              <input
-                id={fileInputId}
-                type="file"
-                accept=".docx,.pptx,.pdf"
-                onChange={(event) => selectFile(event.target.files?.[0])}
-              />
-              <span className="file-symbol" aria-hidden="true" />
-              {selectedFile === null ? (
-                <>
-                  <strong>拖入文件，或点击浏览</strong>
-                  <span>DOCX · PPTX · TEXT PDF</span>
-                </>
-              ) : (
-                <>
-                  <strong>{selectedFile.name}</strong>
-                  <span>
-                    {(selectedFile.size / 1024 / 1024).toFixed(2)} MB ·
-                    点击可重新选择
-                  </span>
-                </>
-              )}
-            </label>
-
-            <p className="notice" role="status">
-              {notice}
-            </p>
+      <div className="app-pane">
+        {loadError ? (
+          <div className="app-alert" role="alert">
+            <AlertTriangle aria-hidden="true" size={15} />
+            <span>{loadError}</span>
+            <button type="button" onClick={() => setLoadError(null)}>
+              关闭
+            </button>
           </div>
+        ) : null}
 
-          <aside className="configuration-column" aria-label="翻译设置">
-            <div className="section-heading section-heading--compact">
-              <div>
-                <p className="step-label">02 / 设置</p>
-                <h2>翻译配置</h2>
-              </div>
-            </div>
-
-            <label className="field">
-              <span>目标语言</span>
-              <select defaultValue="zh-CN">
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-                <option value="ja">日本語</option>
-              </select>
-            </label>
-
-            <label className="field">
-              <span>模型服务</span>
-              <select
-                value={selectedProvider}
-                onChange={(event) => setSelectedProvider(event.target.value)}
-                disabled={providers.length === 0}
-              >
-                {providers.length === 0 ? (
-                  <option value="">等待本地目录</option>
-                ) : null}
-                {providers.map((provider) => (
-                  <option key={provider.id} value={provider.id}>
-                    {provider.display_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span>模型</span>
-              <select disabled defaultValue="pending">
-                <option value="pending">待核验后随版本发布</option>
-              </select>
-            </label>
-
-            <dl className="task-facts">
-              <div>
-                <dt>输出</dt>
-                <dd>软件专属数据目录</dd>
-              </div>
-              <div>
-                <dt>预览</dt>
-                <dd>首版关闭</dd>
-              </div>
-            </dl>
-
-            <Button
-              type="button"
-              className="min-h-11 w-full rounded-[7px] text-[13px] font-semibold disabled:pointer-events-auto disabled:cursor-not-allowed disabled:bg-[#dfe3df] disabled:text-[#758079] disabled:opacity-100"
-              disabled
-            >
-              核心 pipeline 接入后启用
-            </Button>
-          </aside>
-        </section>
-      </main>
+        <main
+          className={`app-main ${activeRoute === 'providers' ? 'app-main--providers' : ''}`}
+        >
+          <div className="route-view" hidden={activeRoute !== 'translate'}>
+            <TranslationWorkspace
+              active={activeRoute === 'translate'}
+              catalog={catalog}
+              providers={providers}
+              jobs={sessionJobs}
+              onOpenModelSettings={() => setActiveRoute('providers')}
+              onStart={startTranslation}
+            />
+          </div>
+          <div className="route-view" hidden={activeRoute !== 'history'}>
+            <HistoryPage catalog={catalog} jobs={jobs} />
+          </div>
+          <div className="route-view" hidden={activeRoute !== 'providers'}>
+            <ProviderPage
+              catalog={catalog}
+              providers={providers}
+              onCreate={addCustomProvider}
+              onSave={saveProvider}
+              onDelete={removeProvider}
+            />
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

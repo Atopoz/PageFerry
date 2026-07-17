@@ -7,7 +7,7 @@
 
   <p>
     面向个人用户的本地优先文档翻译客户端<br />
-    专注 DOCX、PPTX 和 PDF
+    专注 DOCX、PPTX、TXT、Markdown 和 PDF
   </p>
 </div>
 

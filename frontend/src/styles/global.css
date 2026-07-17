@@ -1,3 +1,5 @@
+/* 声明 PageFerry 的全局 token、排版与可访问交互基线。 */
+
 @import 'tailwindcss';
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
@@ -5,8 +7,8 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  color: #20231f;
-  background: #f4f2ec;
+  color: #171b1d;
+  background: #ffffff;
   font-family:
     ui-sans-serif,
     -apple-system,
@@ -19,18 +21,25 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  --paper: #f4f2ec;
-  --surface: #fffefa;
-  --surface-muted: #f8f7f2;
-  --ink: #20231f;
-  --muted-text: #666b65;
-  --quiet: #969b94;
-  --line: #e3e1da;
-  --line-strong: #cbc9c0;
-  --brand: #087f5b;
-  --brand-soft: rgb(8 127 91 / 12%);
-  --brand-wash: #f0f8f4;
-  --danger: #c2493d;
+  color-scheme: light;
+
+  --paper: #ffffff;
+  --surface: #ffffff;
+  --surface-muted: #f6f8f9;
+  --sidebar: #f6f8f9;
+  --ink: #171b1d;
+  --ink-faint: #899196;
+  --muted-text: #60686c;
+  --quiet: #687277;
+  --line: #e2e7e8;
+  --line-strong: #cfd7da;
+  --brand: #126b83;
+  --brand-dark: #0a5369;
+  --brand-soft: rgb(18 107 131 / 14%);
+  --focus-ring: #126b83;
+  --brand-wash: #edf6f8;
+  --success: #167347;
+  --danger: #bf4e48;
   --mono: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
 
   --background: var(--paper);
@@ -105,6 +114,7 @@ body {
   min-height: 100vh;
   margin: 0;
   background: var(--paper);
+  -webkit-font-smoothing: antialiased;
 }
 
 button,
@@ -117,4 +127,17 @@ button,
 label,
 select {
   -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+a:focus-visible,
+select:focus-visible,
+input:focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+::selection {
+  color: var(--ink);
+  background: #cce8ef;
 }

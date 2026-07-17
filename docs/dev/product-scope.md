@@ -4,7 +4,7 @@
 
 ## 1. 产品定义
 
-PageFerry 是面向个人用户的本地文档翻译客户端：选择原文件，配置语言与模型，等待任务完成，得到一个新文件。它不是 JOTO-Translation 企业平台的缩小皮肤，而是把可复用的文档翻译能力剥离后，重新建立一套更短、更适合桌面端的产品边界。
+PageFerry 是面向个人用户的本地文档翻译客户端：选择原文件，配置语言与模型，等待任务完成，得到一个新文件。它直接复用 JOTO-Translation 当前成熟的文档 pipeline，但不搬企业任务、租户和远程存储外壳，而是建立一套更短、更适合桌面端的产品边界。
 
 首版的核心承诺只有三个：
 
@@ -28,14 +28,19 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 ### 进入首版
 
 - DOCX 翻译。
-- PPTX 翻译。
-- 原生文本型 PDF 翻译。
+- PPTX 翻译，包括已有 speaker notes 的正文。
+- TXT 翻译。
+- Markdown 翻译，保护代码块、inline code 与链接目标。
+- 原生文本型 PDF 翻译，作为首版后续的独立 pipeline 阶段。
 - 源语言自动识别和目标语言选择。
 - 随应用版本发布的 provider/model catalog。
-- 用户输入 API Key、连通性检测、选择默认模型。
+- 五个 preset 常驻列表；每个 provider 配置一个 API Key，完成连通性检测并选择默认模型。
+- 用户可以用显示名与 Base URL 创建 OpenAI-compatible 自定义 provider。
 - 本地任务状态、进度、失败原因和历史记录。
 - 输出文件定位与“用系统默认应用打开”。
 - macOS Apple Silicon 安装包作为第一个发布目标。
+
+当前文件选择器、拖放校验和 job 入口只接受 DOCX、PPTX、TXT、Markdown。PDF 与 XLSX 尚未形成端到端能力，不在界面中展示为支持格式。
 
 ### 明确不进入首版
 
@@ -67,11 +72,11 @@ v0.1 砍掉内置预览，先把“文件进、文件出”做可靠。完成后
 
 默认位置：
 
-| 平台 | 目录 |
-| --- | --- |
-| macOS | `~/Library/Application Support/PageFerry/` |
-| Windows | `%LOCALAPPDATA%\PageFerry\` |
-| Linux | `~/.local/share/PageFerry/` |
+| 平台    | 目录                                       |
+| ------- | ------------------------------------------ |
+| macOS   | `~/Library/Application Support/PageFerry/` |
+| Windows | `%LOCALAPPDATA%\PageFerry\`                |
+| Linux   | `~/.local/share/PageFerry/`                |
 
 目录内容：
 
@@ -88,14 +93,16 @@ PageFerry/
 其他规则：
 
 - 源文件按只读输入处理，不复制回源路径、不原地覆盖。
+- 本地 path 与 Web upload 共用 source size policy；0-byte 或超过 200 MB 的文件都不创建任务 metadata。
 - 输出先写临时文件，校验完成后再原子改名。
 - SQLite 不存文档正文或二进制文件。
+- 任务 API 只展示源文件 basename，不返回本地绝对路径。
 - API Key 进入系统 Keychain；SQLite 只保存 secret reference。
 - 用户可以选择“导出到指定目录”，但内部 workspace 仍归 PageFerry 管理。
 
 ## 6. 最小用户流程
 
-1. 首次启动选择模型服务，输入 API Key，执行检测并保存默认模型。
+1. 首次启动从常驻 preset 列表选择模型服务，输入唯一 API Key，执行检测并保存默认模型；其他服务可通过 OpenAI-compatible 自定义入口接入。
 2. 拖入一个受支持文档。
 3. 选择目标语言和模型，可选调整少量高级参数。
 4. 创建任务，查看按文档阶段表达的进度和明确错误。
@@ -105,9 +112,9 @@ PageFerry/
 
 ## 7. v0.1 验收标准
 
-- 三种格式各有一组 golden corpus，覆盖表格、页眉页脚、批注/备注、复杂字体和长文本等代表性结构。
+- 当前四种可用格式各有一组 golden corpus；Office 文档覆盖表格、页眉页脚、speaker notes、批注关系和复杂字体，纯文本覆盖编码、换行、长文本与 Markdown 保护区。原生文本型 PDF 接入后补齐独立 corpus，再进入首版发布验收。
 - 同一输入与固定 translator stub 能得到结构稳定、可重复比较的输出。
 - 任意失败都不会损坏原文件，并能清理或标识残留 workspace。
-- 应用重启后可以恢复任务历史，运行中任务会转成可解释的中断状态。
+- 应用重启后可以恢复任务历史；没有 durable worker 的阶段，遗留 queued/running 任务都会转成可解释的中断状态。
 - 除用户选择的 LLM endpoint 外，核心翻译不依赖 PageFerry 远程服务。
 - 在目标 macOS 机器上通过安装、首次启动、翻译、打开结果和卸载 smoke test。

@@ -8,6 +8,7 @@
       "display_name": "OpenAI",
       "protocol": "openai",
       "credential_type": "api_key",
+      "available": false,
       "default_base_url": null,
       "base_url_editable": false
     },
@@ -16,6 +17,7 @@
       "display_name": "Google Gemini",
       "protocol": "gemini",
       "credential_type": "api_key",
+      "available": false,
       "default_base_url": null,
       "base_url_editable": false
     },
@@ -24,14 +26,33 @@
       "display_name": "DeepSeek",
       "protocol": "openai",
       "credential_type": "api_key",
-      "default_base_url": null,
-      "base_url_editable": false
+      "available": true,
+      "default_base_url": "https://api.deepseek.com",
+      "base_url_editable": true,
+      "chat_path": "/chat/completions",
+      "models_path": "/models",
+      "docs_url": "https://api-docs.deepseek.com/",
+      "api_key_url": "https://platform.deepseek.com/api_keys"
+    },
+    {
+      "id": "kimi",
+      "display_name": "Kimi",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "available": true,
+      "default_base_url": "https://api.moonshot.cn/v1",
+      "base_url_editable": true,
+      "chat_path": "/chat/completions",
+      "models_path": "/models",
+      "docs_url": "https://platform.kimi.com/docs/",
+      "api_key_url": "https://platform.kimi.com/console/api-keys"
     },
     {
       "id": "siliconflow",
       "display_name": "SiliconFlow",
       "protocol": "openai",
       "credential_type": "api_key",
+      "available": false,
       "default_base_url": null,
       "base_url_editable": false
     },
@@ -40,22 +61,46 @@
       "display_name": "Zhipu GLM",
       "protocol": "openai",
       "credential_type": "api_key",
-      "default_base_url": null,
-      "base_url_editable": false
+      "available": true,
+      "default_base_url": "https://open.bigmodel.cn/api/paas/v4",
+      "base_url_editable": true,
+      "chat_path": "/chat/completions",
+      "models_path": null,
+      "docs_url": "https://docs.bigmodel.cn/",
+      "api_key_url": "https://bigmodel.cn/usercenter/proj-mgmt/apikeys"
     },
     {
       "id": "minimax",
       "display_name": "MiniMax",
       "protocol": "openai",
       "credential_type": "api_key",
-      "default_base_url": null,
-      "base_url_editable": false
+      "available": true,
+      "default_base_url": "https://api.minimaxi.com/v1",
+      "base_url_editable": true,
+      "chat_path": "/chat/completions",
+      "models_path": "/models",
+      "docs_url": "https://platform.minimaxi.com/docs/",
+      "api_key_url": "https://platform.minimaxi.com/user-center/basic-information/interface-key"
+    },
+    {
+      "id": "mimo",
+      "display_name": "Xiaomi MiMo",
+      "protocol": "openai",
+      "credential_type": "api_key",
+      "available": true,
+      "default_base_url": "https://api.xiaomimimo.com/v1",
+      "base_url_editable": true,
+      "chat_path": "/chat/completions",
+      "models_path": null,
+      "docs_url": "https://mimo.mi.com/docs/",
+      "api_key_url": "https://platform.xiaomimimo.com/"
     },
     {
       "id": "qwen_dashscope",
       "display_name": "Qwen / DashScope",
       "protocol": "openai",
       "credential_type": "api_key",
+      "available": false,
       "default_base_url": null,
       "base_url_editable": false
     },
@@ -64,10 +109,53 @@
       "display_name": "OpenAI-compatible",
       "protocol": "custom",
       "credential_type": "api_key",
+      "available": false,
       "default_base_url": null,
       "base_url_editable": true
     }
   ],
-  "models": [],
-  "provider_models": []
+  "models": [
+    {
+      "id": "deepseek-v4-flash",
+      "display_name": "DeepSeek V4 Flash",
+      "capabilities": ["text", "translation", "thinking-toggle"]
+    },
+    {
+      "id": "glm-5.2",
+      "display_name": "GLM 5.2",
+      "capabilities": ["text", "translation"]
+    },
+    {
+      "id": "mimo-v2.5-pro",
+      "display_name": "MiMo V2.5 Pro",
+      "capabilities": ["text", "translation"]
+    }
+  ],
+  "provider_models": [
+    {
+      "provider_id": "deepseek",
+      "model_id": "deepseek-v4-flash",
+      "upstream_model_id": "deepseek-v4-flash",
+      "enabled_by_default": true,
+      "default_request_options": {
+        "thinking": {
+          "type": "disabled"
+        }
+      }
+    },
+    {
+      "provider_id": "glm",
+      "model_id": "glm-5.2",
+      "upstream_model_id": "glm-5.2",
+      "enabled_by_default": false,
+      "default_request_options": {}
+    },
+    {
+      "provider_id": "mimo",
+      "model_id": "mimo-v2.5-pro",
+      "upstream_model_id": "mimo-v2.5-pro",
+      "enabled_by_default": false,
+      "default_request_options": {}
+    }
+  ]
 }

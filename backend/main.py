@@ -1,24 +1,75 @@
+"""创建并暴露 PageFerry FastAPI sidecar 应用."""
+
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from api.registry import api_router
 from api.v1.system import HealthResponse, health
 from core.paths import resolve_app_paths
 from core.settings import Settings, get_settings
+from db.jobs import JobRepository
 from db.sqlite import initialize_database
+from modules.model_catalog.provider_config import (
+    HttpClientFactory,
+    ProviderConfigError,
+    ProviderConfigService,
+    SQLiteProviderConfigRepository,
+)
+from modules.model_catalog.secrets import KeyringSecretStore, SecretStore
+from modules.translation.jobs import TranslationJobService
+
+logger = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    secret_store: SecretStore | None = None,
+    http_client_factory: HttpClientFactory | None = None,
+) -> FastAPI:
+    """构造可注入 provider 基础设施的应用, 方便安全测试."""
+
     resolved_settings = settings or get_settings()
     paths = resolve_app_paths(resolved_settings.data_dir)
+    provider_config_service = ProviderConfigService(
+        SQLiteProviderConfigRepository(paths.database),
+        (
+            secret_store
+            if secret_store is not None
+            else KeyringSecretStore(service_name=resolved_settings.secret_service_name)
+        ),
+        http_client_factory=http_client_factory,
+    )
+    job_repository = JobRepository(paths.database)
+    translation_job_service = TranslationJobService(
+        job_repository,
+        provider_config_service,
+        workspace_dir=paths.workspace,
+        output_dir=paths.outputs,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        """服务请求前创建本地路径并应用 SQLite migration."""
+
         paths.ensure()
         initialize_database(paths.database)
+        # 启动前先尝试 reconciliation 0012 staging 的 Keychain refs。
+        # 失败时保留 staging 并继续提供非敏感功能, 下次启动再安全重试。
+        try:
+            provider_config_service.reconcile_legacy_secret_references()
+        except ProviderConfigError:
+            # cleanup staging 会保留, 不能因临时 Keychain 故障制造 sidecar startup failure。
+            # 固定 warning 不携带 exception, reference 或 Key; 下次启动会幂等重试。
+            logger.warning("Provider credential reconciliation is pending; retrying next startup.")
+        # BackgroundTasks 没有 durable worker; 重启后的 queued/running 都不可能自动继续。
+        job_repository.mark_interrupted_jobs()
         yield
 
     application = FastAPI(
@@ -27,14 +78,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         debug=resolved_settings.debug,
         lifespan=lifespan,
     )
+
+    @application.exception_handler(RequestValidationError)
+    async def handle_request_validation_error(
+        _: Request,
+        error: RequestValidationError,
+    ) -> JSONResponse:
+        """返回不含原始 input、ctx 或 URL 的全局 request validation 错误。"""
+
+        # FastAPI 默认会把失败字段的 input 原样放进 422; provider API 中这可能是
+        # API Key 或超长 endpoint, 因此这里只保留定位与稳定错误类型。
+        details: list[dict[str, object]] = []
+        for item in error.errors():
+            raw_location = item.get("loc", ())
+            scope = (
+                raw_location[0]
+                if raw_location and raw_location[0] in {"body", "query", "path", "header", "cookie"}
+                else "request"
+            )
+            # 字段名也可能来自用户构造的 extra key, 因此 loc 只保留固定 request scope。
+            details.append(
+                {
+                    "type": item.get("type", "value_error"),
+                    "loc": [scope],
+                    "msg": "Invalid request value.",
+                }
+            )
+        return JSONResponse(status_code=422, content={"detail": details})
+
     application.state.settings = resolved_settings
     application.state.paths = paths
+    application.state.provider_config_service = provider_config_service
+    application.state.translation_job_service = translation_job_service
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.allowed_origins),
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Authorization", "Content-Type"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "X-PageFerry-Boot-Token"],
     )
     application.add_api_route("/healthz", health, response_model=HealthResponse, tags=["system"])
     application.include_router(api_router)

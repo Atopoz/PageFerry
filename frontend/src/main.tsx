@@ -1,3 +1,5 @@
+/** 创建 PageFerry 的 React root，并在开发期保留 StrictMode 检查。 */
+
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 

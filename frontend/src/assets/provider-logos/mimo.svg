@@ -1,0 +1,12 @@
+<!-- 小尺寸 provider 列表使用居中的几何 M，避免完整字标缩放后发糊。 -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Xiaomi MiMo">
+  <rect width="32" height="32" rx="7" fill="#0b0d0f"/>
+  <path
+    d="M8.5 22V10.25L16 16.45l7.5-6.2V22"
+    fill="none"
+    stroke="#f5f6f6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="2.45"
+  />
+</svg>

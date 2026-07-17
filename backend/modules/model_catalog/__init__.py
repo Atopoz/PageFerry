@@ -1,3 +1,21 @@
-from modules.model_catalog.catalog import ModelCatalog, load_bundled_catalog
+"""导出 provider catalog 类型与 loader."""
 
-__all__ = ["ModelCatalog", "load_bundled_catalog"]
+from modules.model_catalog.catalog import (
+    ModelCatalog,
+    ModelDefinition,
+    ProviderDefinition,
+    ProviderModelDefinition,
+    ProviderModelRequestOptions,
+    ThinkingOptions,
+    load_bundled_catalog,
+)
+
+__all__ = [
+    "ModelCatalog",
+    "ModelDefinition",
+    "ProviderDefinition",
+    "ProviderModelDefinition",
+    "ProviderModelRequestOptions",
+    "ThinkingOptions",
+    "load_bundled_catalog",
+]

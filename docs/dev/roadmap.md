@@ -1,13 +1,13 @@
 # 迁移路线
 
-> 状态：Draft · 原则：每阶段都有可独立验收的产物
+> 状态：Active · 原则：每阶段都有可独立验收的产物
 
 ## 总体顺序
 
 ```mermaid
 flowchart LR
-    P0["0. 基线与许可"] --> P1["1. 应用骨架"]
-    P1 --> P2["2. DOCX / PPTX"]
+    P0["0. 当前 runtime 基线"] --> P1["1. 应用骨架"]
+    P1 --> P2["2. DOCX / PPTX / TXT / MD"]
     P2 --> P3["3. ONNX Layout spike"]
     P3 --> P4["4. 文本型 PDF"]
     P4 --> P5["5. 完整任务与模型配置"]
@@ -17,21 +17,21 @@ flowchart LR
 
 Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PDF pipeline 搬完，再换 ONNX，只会制造一次确定性的返工——这种顺序没有任何值得维护的浪漫。
 
-## Phase 0：固定源项目基线
+## Phase 0：固定 behavior oracle
 
 ### 工作
 
-- 列出 JOTO-Translation 中 DOCX、PPTX、PDF pipeline 的入口、依赖、共享工具和企业耦合点。
-- 盘点原 pipeline 的全部提示词、动态插值字段、消息角色和调用位置，固定当前输出行为作为改造基线。
+- 以已有 JOTO-Translation runtime 与结构回归测试作为 behavior oracle。
+- 列出 DOCX、PPTX、TXT、Markdown、PDF pipeline 的入口、依赖、共享工具和企业耦合点，直接迁核心 pipeline，不凭文件名或旧印象重写。
+- 盘点现有 pipeline 的提示词、动态插值字段、消息角色和调用位置，固定当前输出行为作为迁移基线。
 - 建立每种格式的 golden corpus 与结构指标，不只比较“能不能打开”。
-- 记录源项目测试基线。前期调研看到 129 个测试通过，但迁移开始前必须在当前 commit 重跑并固定 SHA。
-- 建立 copied / adapted / rewritten 来源清单，准备 `THIRD_PARTY_NOTICES`。
-- 单独审计 `pdfminerex` 与模型权重的来源和许可证。
+- 在上述 HEAD 重跑对应测试，记录测试命令和结果；不使用旧 commit 的测试数量代替当前证据。
+- 明确列出 PageFerry 只允许替换的 provider、job、原子落盘和 module 边界，以及保留的已证实结构 bug fix。
 
 ### 验收门
 
-- 每段待迁代码都有来源、测试和保留/删除理由。
-- 没有来源不明的模型、字体、测试文档或二进制被带入新仓库。
+- DOCX、PPTX、TXT 与 Markdown 的关键行为都有当前 runtime 测试或 golden corpus 证据。
+- 迁移差异能明确归类为 PageFerry 边界适配、已证实 bug fix 或迁移回归；不能用“重新设计”掩盖漏迁行为。
 
 ## Phase 1：应用骨架
 
@@ -46,7 +46,7 @@ Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PD
 
 ### 当前状态
 
-本仓库当前处于此阶段。尚未完成 Python sidecar 冻结、Tauri 进程管理和任何文档翻译。
+Phase 1 的开发骨架已完成；Python sidecar 冻结与 Tauri 进程管理仍未完成。为验证真实产品路径，DeepSeek 配置、Keychain、任务 API 和结果打开能力已提前随 Phase 2 一起接入。
 
 ### 验收门
 
@@ -55,22 +55,24 @@ Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PD
 - Rust `cargo check` 全过，Tauri 配置能解析并生成权限 schema。
 - 本地 dev 启动后，UI 能并行读取 health 与 bundled catalog。
 
-## Phase 2：迁移 DOCX 与 PPTX
+## Phase 2：迁移 DOCX、PPTX、TXT 与 Markdown
 
 ### 工作
 
 - 先迁 translator contract 与确定性 stub。
 - 将原提示词改造成版本化的稳定 system prompt、任务级稳定上下文和变量 segment payload，禁止把原文重新拼回 system instruction。
 - 为 prompt 组装增加 snapshot 测试，并在 adapter usage 中归一化 cache read/write token。
-- 原样迁入 DOCX pipeline，去除远程存储、企业任务和数据库 entity 依赖。
-- 原样迁入 PPTX pipeline，保持 shape/text frame/notes 行为。
+- 直接迁入当前 DOCX pipeline；只去除远程存储、企业任务和数据库 entity 依赖，并接入 PageFerry job 与原子落盘。
+- 直接迁入当前 PPTX pipeline，并把 speaker notes 作为 PageFerry 必做新增：翻译 shape、text frame、table 与 notes，同时保持 notes relationship。
+- 直接迁入当前 TXT 与 Markdown 的读取、分段和回写；Markdown 必须保护代码与链接目标，TXT 必须保留编码和换行风格。
+- 在 `backend/modules/` 下分别维护 `plain_text/`、`docx/`、`pptx/`，格式专属 runtime 不互相堆叠。
 - 将任务 workspace、输出原子落盘和结构化错误接到统一 module。
-- 对每次行为差异明确标记是 bug fix、产品裁剪还是迁移回归。
+- 保留已经用回归测试证实的结构 bug fix；对每次行为差异明确标记是 bug fix、PageFerry 边界适配还是迁移回归。
 
 ### 验收门
 
 - golden corpus 能稳定生成并打开。
-- 段落/run、表格、页眉页脚和 slide/shape/notes 等关键结构指标达到既定阈值。
+- 段落/run、表格、页眉页脚和 slide/shape/notes 等关键结构指标达到既定阈值；speaker notes 必须有正文翻译与 relationship 双重检查。
 - 不同 segment 的固定 system prefix 字节级一致；受支持 provider 的重复 batch 基准测试能观察到真实 cache usage，未命中时有可解释数据而不是猜测。
 - 取消、异常和进程中止都不覆盖源文件。
 
@@ -78,7 +80,7 @@ Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PD
 
 ### 工作
 
-- 从源模型导出或获取合法的 PP-DocLayoutV2 ONNX artifact。
+- 获取并固定可复现的 PP-DocLayoutV2 ONNX artifact。
 - 复刻预处理、后处理、label 映射、NMS 与坐标还原。
 - 在 macOS arm64 CPU 上比较 Paddle 参考输出和 ONNX 输出。
 - 记录冷启动、单页延迟、峰值内存、模型大小与多页批处理策略。
@@ -96,7 +98,7 @@ Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PD
 
 - 只接收有文本层的 PDF，扫描页在入口处明确拒绝。
 - 迁入文本抽取、阅读顺序、layout、翻译和回写阶段。
-- 隔离并记录 `pdfminerex` fork。
+- 通过独立 adapter 隔离 `pdfminerex` runtime，不让它渗入普通业务 module。
 - 建立字体缺失、坐标溢出、旋转页面和混合语言用例。
 
 ### 验收门
@@ -125,13 +127,13 @@ Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PD
 ### 工作
 
 - 冻结 Python sidecar，Tauri 负责启动、健康等待、退出和异常回收。
-- 打包模型 manifest、catalog、SQLite migration 和必要许可证。
+- 打包模型 manifest、catalog、SQLite migration 和运行资源。
 - 完成代码签名、公证、升级和卸载策略。
 - 在没有开发工具链的新用户机器做 clean-room smoke test。
 
 ### 验收门
 
-- DMG 安装、首次启动、模型配置、三种格式翻译、打开结果、升级和卸载全部通过。
+- DMG 安装、首次启动、模型配置、五种格式翻译、打开结果、升级和卸载全部通过。
 - 运行时不依赖用户预装 Python、Node、Rust、Office 或 LibreOffice。
 
 ## Phase 7：扫描件与 OCR（v0.1 之后）
@@ -143,7 +145,7 @@ Layout spike 提前到 PDF 完整迁移之前。否则先把依赖 Paddle 的 PD
 
 ## 最近下一步
 
-1. 完成 Phase 1 全量验证并修正骨架。
-2. 对源仓库做 pipeline/依赖清单，不复制代码。
-3. 选择每种格式的首批 golden files，并确认是否允许纳入仓库。
-4. 以 DOCX 最小闭环开始 Phase 2，先接 translator stub，再接真实模型。
+1. 用两份真实 DOCX 与至少一份真实 PPTX 完成 DeepSeek 翻译和 render QA。
+2. 固定首批 golden corpus 的结构签名；外部样例只读使用，不提交到仓库。
+3. 完成 sidecar 生命周期、随机端口与 boot token 的 Tauri 闭环。
+4. 将原生文本型 PDF 保持为独立 Phase 4，不塞回轻量格式 module。

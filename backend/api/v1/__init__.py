@@ -1,1 +1,1 @@
-"""Version 1 local API."""
+"""收纳版本为 v1 的本地 API endpoint。"""

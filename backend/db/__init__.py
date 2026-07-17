@@ -1,1 +1,1 @@
-"""SQLite persistence for PageFerry."""
+"""提供 PageFerry 的 SQLite persistence 边界。"""

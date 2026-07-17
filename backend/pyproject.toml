@@ -6,14 +6,20 @@ readme = "README.md"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "fastapi>=0.116,<1",
+  "httpx2>=2,<3",
+  "keyring>=25.6,<26",
+  "mistune>=3.2,<4",
   "platformdirs>=4.3,<5",
   "pydantic-settings>=2.10,<3",
+  "python-docx>=1.2,<2",
+  "python-multipart>=0.0.20,<1",
+  "python-pptx>=1.0,<2",
+  "tiktoken>=0.11,<1",
   "uvicorn[standard]>=0.35,<1",
 ]
 
 [dependency-groups]
 dev = [
-  "httpx2>=2,<3",
   "pytest>=8.4,<10",
   "ruff>=0.12,<1",
 ]

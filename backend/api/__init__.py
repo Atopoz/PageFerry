@@ -1,1 +1,1 @@
-"""HTTP API boundary for the local desktop client."""
+"""定义本地桌面客户端使用的 HTTP API 边界。"""

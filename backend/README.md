@@ -14,3 +14,9 @@ uv run --directory backend pytest
 uv run --directory backend ruff check .
 uv run --directory backend ruff format --check .
 ```
+
+Provider 安全边界：自定义 OpenAI-compatible endpoint 与 preset Base URL override
+只有显式 loopback 可以使用 HTTP，且该连接会忽略 `HTTP_PROXY` / `ALL_PROXY`；
+HTTPS endpoint 仍保留系统代理行为。旧数据库升级到 provider 单配置约束时，migration 只暂存
+Keychain reference，不保存 Key；startup 会保留可用 reference、清理孤立条目。临时
+Keychain 故障不会阻止 sidecar 启动，staging 会留待下次启动幂等重试。

@@ -1,3 +1,5 @@
+/** 保留源码的 shadcn Button 基元，供需要统一 variant 的界面复用。 */
+
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { Slot } from 'radix-ui';
@@ -41,6 +43,7 @@ const buttonVariants = cva(
   },
 );
 
+/** 渲染原生 button 或 Radix Slot，并合并稳定的视觉 variant。 */
 function Button({
   className,
   variant = 'default',

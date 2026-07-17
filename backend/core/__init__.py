@@ -1,1 +1,1 @@
-"""Application-wide settings and platform paths."""
+"""收纳应用级 settings 与平台路径解析。"""

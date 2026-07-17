@@ -1,3 +1,5 @@
+"""集中解析 PageFerry 自有数据目录, 防止业务代码散落平台路径判断。"""
+
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -6,7 +8,7 @@ from platformdirs import user_data_path
 
 @dataclass(frozen=True, slots=True)
 class AppPaths:
-    """All writable paths owned by one PageFerry installation."""
+    """列出一个 PageFerry 安装实例拥有的所有可写路径。"""
 
     root: Path
     database: Path
@@ -17,6 +19,8 @@ class AppPaths:
     logs: Path
 
     def ensure(self) -> None:
+        """创建 root 与各用途子目录, 已存在时保持幂等。"""
+
         self.root.mkdir(parents=True, exist_ok=True)
         for directory in (
             self.workspace,
@@ -29,6 +33,8 @@ class AppPaths:
 
 
 def resolve_app_paths(data_dir: Path | None = None) -> AppPaths:
+    """优先使用显式测试目录, 否则解析当前平台的用户数据目录。"""
+
     root = (
         data_dir.expanduser().resolve()
         if data_dir is not None
