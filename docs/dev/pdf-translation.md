@@ -61,7 +61,7 @@ scripts/
 contract 随代码发布；二进制安装到版本化 app-data：
 
 ```text
-<app-data>/pdf/2026.07.18.1/
+<app-data>/pdf/2026.07.18.2/
   layout/PP-DocLayoutV3/inference.onnx
   fonts/*.ttf
 ```
@@ -77,10 +77,24 @@ contract 随代码发布；二进制安装到版本化 app-data：
 uv run --directory backend python ../scripts/sync-pdf-assets.py --data-dir ../.data --pack layout
 ```
 
-字体没有写死第三方分发地址；配置 PageFerry 自有 CDN 后，用 `--base-url` 指定 CDN，并用
-`--pack fonts-common-zh-cn` 等选择安装。已有文件只有在 size 与 SHA-256 都通过时才复用，下载先进入
-同目录临时文件，校验、`fsync` 后再原子替换。正式产品仍需补状态、进度、取消、重试和磁盘
-空间错误的安装 API/UI；用户创建 PDF 任务前显式确认下载，不能让普通任务悄悄联网。
+manifest 的默认来源是 PageFerry 自有 R2/CDN：
+`https://assets.pageferry.download/pdf/2026.07.18.2/`。资源按 revision 使用不可变 object key，
+全部携带一年 immutable cache header；下载后的可信边界仍是 manifest 中的 size 与 SHA-256，
+不是 CDN cache 或 R2 ETag。可用 `--pack fonts-common-zh-cn` 等选择安装，也可用
+`--base-url` 显式切换镜像。已有文件只有在 size 与 SHA-256 都通过时才复用，下载先进入同目录
+临时文件，校验、`fsync` 后再原子替换。正式产品仍需补状态、进度、取消、重试和磁盘空间错误的
+安装 API/UI；用户创建 PDF 任务前显式确认下载，不能让普通任务悄悄联网。
+
+每个 asset 还固定 `Atopoz/PageFerry` 公开 GitHub Release 的独立 fallback URL，并记录官方
+upstream。下载顺序为 R2/CDN、GitHub Release、官方 upstream；任一候选的网络、HTTP、size 或
+SHA-256 校验失败后才切换，全部失败时不替换本地旧文件。这样即使 `pageferry.download` 未续费，
+已经发布的客户端仍能从 GitHub 下载；官方 upstream 是第三层灾备，不替代自有版本管理。
+
+发布时先运行 `scripts/publish-pdf-assets-github.py`，在 draft Release 内完成全量上传与 digest
+核验后再公开；随后运行 `scripts/publish-pdf-assets-r2.py`。两个脚本都会先校验本地资源并复用
+内容一致的同版本文件，冲突则停止；二进制先上传，许可证随后，版本化 manifest 最后上传作为
+完成标志。Cloudflare 只对 `assets.pageferry.download/pdf/` 启用 cache eligibility，不开放
+`r2.dev` 公共地址。
 
 ## 5. D950 对照实验
 

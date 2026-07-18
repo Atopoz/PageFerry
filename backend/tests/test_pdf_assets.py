@@ -16,6 +16,7 @@ from modules.pdf.assets import (
     load_pdf_asset_manifest,
     parse_pdf_asset_manifest,
     pdf_asset_download_url,
+    pdf_asset_download_urls,
     pdf_asset_pack_path,
     pdf_asset_path,
     select_pdf_assets,
@@ -51,7 +52,8 @@ def test_repository_manifest_pins_versioned_layout_asset() -> None:
     manifest = load_pdf_asset_manifest(MANIFEST_PATH)
 
     assert manifest.pack_id == "pdf-runtime"
-    assert manifest.pack_revision == "2026.07.18.1"
+    assert manifest.pack_revision == "2026.07.18.2"
+    assert manifest.default_base_url == "https://assets.pageferry.download/pdf/2026.07.18.2/"
     assert len(manifest.assets) == 18
     asset = manifest.assets[0]
     assert asset.relative_path == Path("layout/PP-DocLayoutV3/inference.onnx")
@@ -106,14 +108,70 @@ def test_base_url_override_keeps_manifest_download_path() -> None:
     assert url == "https://mirror.example.test/releases/v7/layout/model.onnx"
 
 
-def test_asset_without_upstream_requires_distribution_base_url() -> None:
-    """字体等自有分发资产没有 CDN base 时必须 fail closed。"""
+def test_download_urls_keep_order_and_remove_duplicates() -> None:
+    """下载候选应依次使用主分发、fallback 与 upstream, 并跳过重复 URL。"""
 
-    manifest = load_pdf_asset_manifest(MANIFEST_PATH)
-    font_asset = find_pdf_asset(manifest, "noto-sans-regular")
+    payload = _manifest_payload()
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    asset = assets[0]
+    assert isinstance(asset, dict)
+    asset["fallback_urls"] = [
+        "https://github.com/pageferry/assets/releases/download/v7/model.onnx",
+        "https://upstream.example.test/model.onnx",
+        "https://github.com/pageferry/assets/releases/download/v7/model.onnx",
+    ]
+    asset["upstream_url"] = "https://upstream.example.test/model.onnx"
+    manifest = parse_pdf_asset_manifest(payload)
+
+    urls = pdf_asset_download_urls(manifest, manifest.assets[0])
+
+    assert urls == (
+        "https://assets.example.test/pdf/7/layout/model.onnx",
+        "https://github.com/pageferry/assets/releases/download/v7/model.onnx",
+        "https://upstream.example.test/model.onnx",
+    )
+    assert manifest.assets[0].fallback_urls == urls[1:]
+    assert pdf_asset_download_url(manifest, manifest.assets[0]) == urls[0]
+
+
+@pytest.mark.parametrize(
+    "fallback_urls",
+    [
+        "https://github.com/pageferry/model.onnx",
+        ["http://github.com/pageferry/model.onnx"],
+        ["https://user:secret@github.com/pageferry/model.onnx"],
+        ["https://github.com/pageferry/model.onnx?download=1"],
+        ["https://github.com/pageferry/model.onnx#sha256"],
+        ["https://github.com/pageferry/releases/"],
+        ["https://github.com/pageferry/../model.onnx"],
+        ["https://github.com:invalid/pageferry/model.onnx"],
+    ],
+)
+def test_manifest_rejects_unsafe_fallback_urls(fallback_urls: object) -> None:
+    """fallback_urls 必须是无凭据和动态参数的 HTTPS 文件 URL array。"""
+
+    payload = _manifest_payload()
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    asset = assets[0]
+    assert isinstance(asset, dict)
+    asset["fallback_urls"] = fallback_urls
+
+    with pytest.raises(PdfAssetManifestError):
+        parse_pdf_asset_manifest(payload)
+
+
+def test_asset_without_upstream_requires_distribution_base_url() -> None:
+    """没有主源、fallback 或 upstream 的资产必须 fail closed。"""
+
+    payload = _manifest_payload()
+    payload["default_base_url"] = None
+    manifest = parse_pdf_asset_manifest(payload)
+    asset = manifest.assets[0]
 
     with pytest.raises(PdfAssetManifestError, match="必须显式提供 base URL"):
-        pdf_asset_download_url(manifest, font_asset)
+        pdf_asset_download_url(manifest, asset)
 
 
 @pytest.mark.parametrize(

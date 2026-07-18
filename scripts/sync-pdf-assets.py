@@ -10,6 +10,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from typing import BinaryIO
 from urllib.error import URLError
@@ -30,7 +31,7 @@ from modules.pdf.assets import (  # noqa: E402
     PdfAssetManifestError,
     is_pdf_asset_valid,
     load_pdf_asset_manifest,
-    pdf_asset_download_url,
+    pdf_asset_download_urls,
     pdf_asset_pack_path,
     pdf_asset_path,
     select_pdf_assets,
@@ -108,7 +109,7 @@ def sync_pdf_asset(
         return True
     except PdfAssetSyncError:
         raise
-    except (OSError, URLError) as error:
+    except (OSError, URLError, HTTPException) as error:
         raise PdfAssetSyncError(f"PDF 资源同步失败: {asset.asset_id}") from error
     finally:
         if temporary_path is not None:
@@ -141,13 +142,26 @@ def sync_pdf_asset_pack(
                 continue
         except OSError as error:
             raise PdfAssetSyncError(f"无法校验现有 PDF 资源: {destination}") from error
-        url = pdf_asset_download_url(manifest, asset, base_url=base_url)
-        downloaded = sync_pdf_asset(
-            asset,
-            url=url,
-            destination=destination,
-            timeout=timeout,
-        )
+        urls = pdf_asset_download_urls(manifest, asset, base_url=base_url)
+        last_error: PdfAssetSyncError | None = None
+        downloaded = False
+        for url in urls:
+            try:
+                downloaded = sync_pdf_asset(
+                    asset,
+                    url=url,
+                    destination=destination,
+                    timeout=timeout,
+                )
+                break
+            except PdfAssetSyncError as error:
+                # 每个候选使用独立临时文件, 坏源绝不能污染下一次尝试或旧文件。
+                last_error = error
+        else:
+            raise PdfAssetSyncError(
+                f"PDF 资源所有下载来源均失败: {asset.asset_id} "
+                f"(尝试 {len(urls)} 个来源), 最后一次错误: {last_error}"
+            ) from last_error
         results.append(
             PdfAssetSyncResult(
                 asset_id=asset.asset_id,

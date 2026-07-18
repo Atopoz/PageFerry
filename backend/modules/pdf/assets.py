@@ -35,6 +35,7 @@ class PdfAsset:
     size_bytes: int
     sha256: str
     upstream_url: str | None = None
+    fallback_urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,14 +129,32 @@ def pdf_asset_download_url(
     *,
     base_url: str | None = None,
 ) -> str:
-    """使用 manifest 默认地址或显式 base URL 生成固定资产 URL。"""
+    """返回资产的首选下载 URL, 保留原有单来源调用 contract。"""
+
+    return pdf_asset_download_urls(manifest, asset, base_url=base_url)[0]
+
+
+def pdf_asset_download_urls(
+    manifest: PdfAssetManifest,
+    asset: PdfAsset,
+    *,
+    base_url: str | None = None,
+) -> tuple[str, ...]:
+    """按主分发、fallback、upstream 的顺序返回去重下载候选。"""
 
     selected_base = base_url or manifest.default_base_url
+    candidates: list[str] = []
     if selected_base is not None:
         normalized_base = normalize_pdf_asset_base_url(selected_base)
-        return urljoin(normalized_base, asset.distribution_path)
+        candidates.append(urljoin(normalized_base, asset.distribution_path))
+    candidates.extend(asset.fallback_urls)
     if asset.upstream_url is not None:
-        return asset.upstream_url
+        candidates.append(asset.upstream_url)
+
+    # 同一 URL 可能同时出现在镜像和 upstream 声明中, 只尝试一次即可。
+    unique_candidates = tuple(dict.fromkeys(candidates))
+    if unique_candidates:
+        return unique_candidates
     raise PdfAssetManifestError(f"PDF 资源 {asset.asset_id} 没有默认来源, 必须显式提供 base URL")
 
 
@@ -252,6 +271,18 @@ def _parse_pdf_asset(raw_asset: Mapping[str, object], index: int) -> PdfAsset:
             f"assets[{index}].upstream_url",
         )
     )
+    raw_fallback_urls = raw_asset.get("fallback_urls", [])
+    if not isinstance(raw_fallback_urls, list):
+        raise PdfAssetManifestError(f"assets[{index}].fallback_urls 必须是 array")
+    fallback_urls: list[str] = []
+    for fallback_index, raw_fallback_url in enumerate(raw_fallback_urls):
+        field = f"assets[{index}].fallback_urls[{fallback_index}]"
+        fallback_urls.append(
+            _safe_asset_url(
+                _required_string(raw_fallback_url, field),
+                field,
+            )
+        )
     return PdfAsset(
         asset_id=asset_id,
         pack=pack,
@@ -260,6 +291,7 @@ def _parse_pdf_asset(raw_asset: Mapping[str, object], index: int) -> PdfAsset:
         size_bytes=size_bytes,
         sha256=sha256,
         upstream_url=upstream_url,
+        fallback_urls=tuple(dict.fromkeys(fallback_urls)),
     )
 
 
@@ -313,13 +345,24 @@ def _safe_download_path(value: object, field: str) -> str:
 
 
 def _safe_asset_url(value: str, field: str) -> str:
-    """验证单资产 upstream fallback URL, 不允许凭据与动态参数。"""
+    """验证单资产 HTTPS 文件 URL, 不允许凭据与动态参数。"""
 
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+        _ = parsed.port
+    except ValueError as error:
+        raise PdfAssetManifestError(f"{field} 必须是有效 HTTPS URL") from error
     if parsed.scheme != "https" or not parsed.hostname:
         raise PdfAssetManifestError(f"{field} 必须是有效 HTTPS URL")
     if parsed.username is not None or parsed.password is not None:
         raise PdfAssetManifestError(f"{field} 不能包含凭据")
     if parsed.query or parsed.fragment:
         raise PdfAssetManifestError(f"{field} 不能包含 query 或 fragment")
+    if not parsed.path or parsed.path.endswith("/"):
+        raise PdfAssetManifestError(f"{field} 必须指向具体文件")
+    if "\\" in value or any(character.isspace() for character in value):
+        raise PdfAssetManifestError(f"{field} 必须是有效 HTTPS 文件 URL")
+    decoded_parts = unquote(parsed.path).split("/")
+    if any(part in {".", ".."} for part in decoded_parts):
+        raise PdfAssetManifestError(f"{field} 不能包含目录穿越")
     return value

@@ -157,7 +157,7 @@ D950 前 10 页已经完成英译中端到端与 render 检查。该样例证明
 
 - 冻结 Python sidecar，Tauri 负责启动、健康等待、退出和异常回收。
 - 打包模型 manifest、catalog、SQLite migration 和许可证；大型模型与字体通过显式 resource-pack 安装进入 app-data。
-- 完成 PDF 资源安装的状态、进度、取消、重试、磁盘错误与自有 CDN 闭环。
+- 自有 R2/CDN、GitHub Release fallback、版本化 manifest 和不可变发布脚本已经接通；继续完成 PDF 资源安装的状态、进度、取消、重试与磁盘错误闭环。
 - 完成代码签名、公证、升级和卸载策略。
 - 在没有开发工具链的新用户机器做 clean-room smoke test。
 

@@ -27,6 +27,6 @@
 - 数据：SQLite 只存任务、artifact 和配置元数据，并为每个 `translation_jobs` 保存创建时的格式 options snapshot；文件写入 PageFerry 专属用户数据目录，API Key 写入系统 Keychain。
 - 提示词：固定翻译规则与待翻译文本分离，按稳定前缀组织请求，并记录 provider 返回的 prompt cache usage。
 - Module：`backend/modules/plain_text/`、`docx/`、`pptx/`、`xlsx/`、`pdf/` 独立维护；PDF 业务代码在 `modules/pdf/` 平铺，`pdfminerex` 作为有来源与许可证记录的 vendor fork 单独管理。
-- PDF Layout：PP-DocLayoutV3 通过 ONNX Runtime CPU 运行；模型由 manifest 固定并显式同步，runtime 不自动下载。header/footer 按普通原生文本翻译，不使用样例专属坐标启发式。
+- PDF Layout：PP-DocLayoutV3 通过 ONNX Runtime CPU 运行；模型由 manifest 固定，版本化模型与字体以 `assets.pageferry.download` 为主源、公开 GitHub Release 为 fallback 显式安装，runtime 不自动下载。header/footer 按普通原生文本翻译，不使用样例专属坐标启发式。
 - 首版不做：预览、扫描 PDF、图像翻译、GPU、企业账号、租户、计费、PostgreSQL、Redis、Celery。
-- 六种文档 pipeline、五个常驻 preset、OpenAI-compatible 自定义 provider、catalog sync 与 model runtime settings contract 正在收口；PDF 的核心路径已经通过 D950 端到端验证，但模型交付和 Python sidecar 尚未打包，仍不能称为可分发版本。
+- 六种文档 pipeline、五个常驻 preset、OpenAI-compatible 自定义 provider、catalog sync 与 model runtime settings contract 正在收口；PDF 的核心路径已经通过 D950 端到端验证，R2/CDN 与 GitHub fallback 资源交付已接通，但安装 UI 与 Python sidecar 尚未打包，仍不能称为可分发版本。

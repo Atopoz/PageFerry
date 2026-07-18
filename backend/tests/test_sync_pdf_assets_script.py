@@ -59,6 +59,18 @@ def _write_manifest(tmp_path: Path, expected: bytes) -> Path:
     return path
 
 
+def _add_fallback_url(manifest_path: Path, fallback_url: str) -> None:
+    """给测试 manifest 的唯一资产增加 fallback 下载地址。"""
+
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assets = payload["assets"]
+    assert isinstance(assets, list)
+    asset = assets[0]
+    assert isinstance(asset, dict)
+    asset["fallback_urls"] = [fallback_url]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def test_sync_pack_skips_network_for_existing_valid_asset(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -135,6 +147,105 @@ def test_sync_pack_uses_base_override_and_atomically_replaces_invalid_asset(
     assert not list(destination.parent.glob("*.download"))
 
 
+def test_sync_pack_does_not_request_fallback_after_primary_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主分发返回有效内容后不应继续请求 GitHub fallback。"""
+
+    expected = b"primary-asset"
+    manifest_path = _write_manifest(tmp_path, expected)
+    _add_fallback_url(
+        manifest_path,
+        "https://github.com/pageferry/assets/releases/download/v3/inference.onnx",
+    )
+    manifest = load_pdf_asset_manifest(manifest_path)
+    pack_path = sync_pdf_assets.resolve_pack_destination(manifest, tmp_path / "app-data")
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request: object, timeout: float) -> io.BytesIO:
+        """记录唯一一次主源请求并返回有效内容。"""
+
+        assert isinstance(request, Request)
+        assert timeout == 120.0
+        requested_urls.append(request.full_url)
+        return io.BytesIO(expected)
+
+    monkeypatch.setattr(sync_pdf_assets, "urlopen", fake_urlopen)
+
+    sync_pdf_assets.sync_pdf_asset_pack(manifest, pack_path)
+
+    assert requested_urls == ["https://origin.example.test/pdf/3/layout/inference.onnx"]
+
+
+def test_sync_pack_falls_back_to_github_after_primary_network_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主源连接失败时应继续从 GitHub fallback 下载。"""
+
+    expected = b"github-asset"
+    fallback_url = "https://github.com/pageferry/assets/releases/download/v3/inference.onnx"
+    manifest_path = _write_manifest(tmp_path, expected)
+    _add_fallback_url(manifest_path, fallback_url)
+    manifest = load_pdf_asset_manifest(manifest_path)
+    pack_path = sync_pdf_assets.resolve_pack_destination(manifest, tmp_path / "app-data")
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request: object, timeout: float) -> io.BytesIO:
+        """让主源连接失败, GitHub fallback 返回有效内容。"""
+
+        assert isinstance(request, Request)
+        assert timeout == 120.0
+        requested_urls.append(request.full_url)
+        if request.full_url != fallback_url:
+            raise sync_pdf_assets.URLError("origin unavailable")
+        return io.BytesIO(expected)
+
+    monkeypatch.setattr(sync_pdf_assets, "urlopen", fake_urlopen)
+
+    results = sync_pdf_assets.sync_pdf_asset_pack(manifest, pack_path)
+
+    assert results[0].downloaded is True
+    assert requested_urls == [
+        "https://origin.example.test/pdf/3/layout/inference.onnx",
+        fallback_url,
+    ]
+    assert results[0].path.read_bytes() == expected
+
+
+def test_sync_pack_falls_back_after_primary_integrity_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """主源内容校验失败也应清理临时文件并继续尝试 fallback。"""
+
+    expected = b"verified-content"
+    fallback_url = "https://github.com/pageferry/assets/releases/download/v3/inference.onnx"
+    manifest_path = _write_manifest(tmp_path, expected)
+    _add_fallback_url(manifest_path, fallback_url)
+    manifest = load_pdf_asset_manifest(manifest_path)
+    pack_path = sync_pdf_assets.resolve_pack_destination(manifest, tmp_path / "app-data")
+    destination = pdf_asset_path(pack_path, manifest.assets[0])
+
+    def fake_urlopen(request: object, timeout: float) -> io.BytesIO:
+        """主源返回同长度坏内容, fallback 返回通过 SHA-256 的内容。"""
+
+        assert isinstance(request, Request)
+        assert timeout == 120.0
+        if request.full_url == fallback_url:
+            return io.BytesIO(expected)
+        return io.BytesIO(b"x" * len(expected))
+
+    monkeypatch.setattr(sync_pdf_assets, "urlopen", fake_urlopen)
+
+    results = sync_pdf_assets.sync_pdf_asset_pack(manifest, pack_path)
+
+    assert results[0].downloaded is True
+    assert destination.read_bytes() == expected
+    assert not list(destination.parent.glob("*.download"))
+
+
 def test_sync_pack_keeps_existing_file_when_hash_check_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -143,7 +254,12 @@ def test_sync_pack_keeps_existing_file_when_hash_check_fails(
 
     expected = b"good-asset"
     received = b"evil-asset"
-    manifest = load_pdf_asset_manifest(_write_manifest(tmp_path, expected))
+    manifest_path = _write_manifest(tmp_path, expected)
+    _add_fallback_url(
+        manifest_path,
+        "https://github.com/pageferry/assets/releases/download/v3/inference.onnx",
+    )
+    manifest = load_pdf_asset_manifest(manifest_path)
     pack_path = sync_pdf_assets.resolve_pack_destination(manifest, tmp_path / "app-data")
     destination = pdf_asset_path(pack_path, manifest.assets[0])
     destination.parent.mkdir(parents=True)
@@ -157,7 +273,7 @@ def test_sync_pack_keeps_existing_file_when_hash_check_fails(
 
     monkeypatch.setattr(sync_pdf_assets, "urlopen", fake_urlopen)
 
-    with pytest.raises(sync_pdf_assets.PdfAssetSyncError, match="SHA-256 校验失败"):
+    with pytest.raises(sync_pdf_assets.PdfAssetSyncError, match="所有下载来源均失败"):
         sync_pdf_assets.sync_pdf_asset_pack(manifest, pack_path)
 
     assert destination.read_bytes() == b"old-asset"

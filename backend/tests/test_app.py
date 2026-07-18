@@ -134,7 +134,7 @@ def test_startup_creates_local_data_layout_and_database(tmp_path) -> None:
     """首次启动应创建 app 目录、数据库与可用健康检查。"""
 
     app = create_app(Settings(data_dir=tmp_path))
-    expected_pack = tmp_path / "pdf" / "2026.07.18.1"
+    expected_pack = tmp_path / "pdf" / "2026.07.18.2"
 
     assert app.state.pdf_asset_pack == expected_pack
     assert app.state.layout_detector.model_path == (
