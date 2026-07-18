@@ -23,7 +23,7 @@ jobs:
 
     steps:
       - name: Check out release source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.release_ref }}
 
@@ -42,14 +42,14 @@ jobs:
           }
 
       - name: Set up Python runtime
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v8.3.2
         with:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
 
       - name: Set up Node.js runtime
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: frontend/.node-version
           cache: npm
@@ -134,7 +134,7 @@ jobs:
           Get-FileHash $installers[0].FullName -Algorithm SHA256
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: PageFerry-${{ inputs.release_ref }}-windows-x64
           path: tauri/target/release/bundle/nsis/*.exe
