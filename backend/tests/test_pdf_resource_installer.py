@@ -16,7 +16,7 @@ from urllib.request import Request
 import pytest
 
 import modules.pdf.resource_installer as installer_module
-from modules.pdf.assets import PdfAssetManifest, parse_pdf_asset_manifest, pdf_asset_path
+from modules.pdf.assets import PdfAsset, PdfAssetManifest, parse_pdf_asset_manifest, pdf_asset_path
 from modules.pdf.resource_installer import (
     PdfAssetSyncError,
     PdfResourceInstaller,
@@ -381,6 +381,72 @@ def test_completed_asset_is_cached_before_next_download_without_rehash(
         installer.close()
 
     assert final.completed_bytes == len(first_content) + len(second_content)
+    assert hash_calls == []
+
+
+def test_status_does_not_rehash_asset_before_completion_callback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """原子替换后即使 callback 暂未拿锁, polling 也不能重复 hash。"""
+
+    content = b"verified-during-download"
+    manifest = _manifest([("layout", "layout", "layout.onnx", content)])
+    callback_started = Event()
+    release_callback = Event()
+    hash_calls: list[Path] = []
+
+    original_hash = installer_module.hash_pdf_asset
+
+    def recording_hash(path: Path) -> tuple[str, int]:
+        """记录意外发生的完整 checksum。"""
+
+        hash_calls.append(path)
+        return original_hash(path)
+
+    def memory_open(_request: Request, *, timeout: float) -> io.BytesIO:
+        """返回已知通过 manifest checksum 的内存内容。"""
+
+        assert timeout == 120.0
+        return io.BytesIO(content)
+
+    monkeypatch.setattr(installer_module, "hash_pdf_asset", recording_hash)
+    installer = PdfResourceInstaller(
+        manifest,
+        tmp_path / "pdf" / manifest.pack_revision,
+        required_packs=("layout",),
+        open_url=memory_open,
+    )
+    original_callback = installer._record_asset_completed
+
+    def delayed_callback(asset: PdfAsset, destination: Path, downloaded: bool) -> None:
+        """把 worker 固定在 replace 与 checksum cache 回填之间。"""
+
+        assert destination.is_file()
+        callback_started.set()
+        if not release_callback.wait(timeout=2):
+            raise TimeoutError("test did not release completion callback")
+        original_callback(asset, destination, downloaded)
+
+    monkeypatch.setattr(installer, "_record_asset_completed", delayed_callback)
+    try:
+        installer.start_install()
+        assert callback_started.wait(timeout=1)
+        during_callback = installer.status()
+        assert during_callback.state == "downloading"
+        assert during_callback.completed_bytes == len(content)
+        assert hash_calls == []
+        with pytest.raises(PdfResourcesNotReadyError):
+            installer.ensure_ready()
+        assert installer.status().state == "downloading"
+        assert hash_calls == []
+        release_callback.set()
+        final = _wait_for_status(installer, lambda status: status.state == "ready")
+    finally:
+        release_callback.set()
+        installer.close()
+
+    assert final.completed_bytes == len(content)
     assert hash_calls == []
 
 

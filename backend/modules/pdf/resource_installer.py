@@ -631,7 +631,14 @@ class PdfResourceInstaller:
     def _refresh_file_states_locked(self, *, verify_unknown: bool) -> None:
         """刷新 stat 指纹, 并按调用边界决定是否读取未知 snapshot 的完整内容。"""
 
+        active_asset_id = (
+            self._current_asset_id if self._worker is not None and self._worker.is_alive() else None
+        )
         for asset in self.assets:
+            if asset.asset_id == active_asset_id:
+                # 当前资产由 worker 独占: replace 后只能由 completion callback 发布
+                # checksum 结论, 避免 status 或任务 gate 抢在 callback 前重复 hash。
+                continue
             path = pdf_asset_path(self.pack_path, asset)
             try:
                 if not path.is_file():
