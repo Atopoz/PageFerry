@@ -11,7 +11,7 @@ flowchart LR
     P2 --> P3["3. ONNX Layout spike"]
     P3 --> P4["4. 文本型 PDF"]
     P4 --> P5["5. 完整任务与模型配置"]
-    P5 --> P6["6. macOS arm64 发布"]
+    P5 --> P6["6. macOS arm64 / Windows x64 发布"]
     P6 -. later .-> P7["7. 扫描件 OCR"]
 ```
 
@@ -46,7 +46,7 @@ Layout spike 提前到 PDF 完整实现之前。否则先接入依赖 Paddle 的
 
 ### 当前状态
 
-Phase 1 的开发骨架已完成；Python sidecar 冻结与 Tauri 进程管理仍未完成。为验证真实产品路径，DeepSeek 配置、Keychain、任务 API 和结果打开能力已提前随 Phase 2 一起接入。
+Phase 1 的开发骨架与 macOS arm64 sidecar 本地冻结已完成。Tauri release 使用随机端口、stdin boot token、ready handshake 和退出回收；DeepSeek 配置、Keychain、任务 API 和结果打开能力也已随 Phase 2 接入。当前发布包仍缺 Developer ID 签名、公证与 clean-room 验收。
 
 ### 验收门
 
@@ -108,12 +108,13 @@ D950 前 10 页对照中，共同匹配 layout box 的平均 IoU 为 0.947。V2 
 
 - 只翻译 PDF 中已有的可见原生文本层；没有可见文本或混入无可见文字的全幅扫描页时稳定返回 `pdf_no_text_layer`，invisible OCR 与内嵌图片不进入翻译。
 - 接入文本抽取、阅读顺序、layout、翻译、回写、结构校验和原子发布阶段。
+- 支持默认关闭的拼接式双语输出：复用同一次译文，逐页把原文放在左侧、译文放在右侧；不做页内双语，也不暴露布局切换。
 - PDF 业务代码在 `backend/modules/pdf/` 平铺；`pdfminerex` 作为独立 vendor fork 管理来源与许可证，不让它渗入普通业务 module。
 - 建立字体缺失、坐标溢出、旋转页面和混合语言用例。
 
 ### 当前状态
 
-核心 pipeline 与 job/frontend 入口已经接通。header/footer 与正文一样按原生文本翻译，不使用针对 D950 的坐标或页高规则；图片 XObject 不进入翻译 payload，发布前递归比较 decoded hash。layout 按页光栅化和 inference，字体与译文 stream 采用 fail-closed，marker 必须完整解析并提供非空回填。模型与字体使用 app-data 中的版本化 PDF resource pack，Git 和应用包只保存 manifest 与许可证；模型或字体缺失以稳定错误停止，模型完整但 layout inference 失败时退回文本框抽取并返回 warning。结果先写同目录临时文件，校验页面几何、图片与源文件 hash 后再 `fsync`、原子落盘。
+核心 pipeline 与 job/frontend 入口已经接通。header/footer 与正文一样按原生文本翻译，不使用针对 D950 的坐标或页高规则；图片 XObject 不进入翻译 payload，发布前递归比较 decoded hash。layout 按页光栅化和 inference，字体与译文 stream 采用 fail-closed，marker 必须完整解析并提供非空回填。模型与字体使用 app-data 中的版本化 PDF resource pack，Git 和应用包只保存 manifest 与许可证；模型或字体缺失以稳定错误停止，模型完整但 layout inference 失败时退回文本框抽取并返回 warning。结果先写同目录临时文件，校验页面几何、图片与源文件 hash 后再 `fsync`、原子落盘。可选双语版复用标准译文逐页左右拼接，并和译文版作为同一任务的两个 artifact 一起成功或一起清理。
 
 D950 前 10 页已经完成英译中端到端与 render 检查。该样例证明当前主路径可运行，不替代旋转页、复杂字体、不同生成器和混合扫描页的完整 golden corpus。
 
@@ -123,6 +124,7 @@ D950 前 10 页已经完成英译中端到端与 render 检查。该样例证明
 - 扫描页、invisible OCR、字体失败或空译文不会静默输出残缺文件。
 - 不需要 LibreOffice、Office 或 PDF 转换服务才能完成翻译。
 - 输出页面几何和递归 Image XObject signature 与源文件一致，任何失败都不覆盖源文件。
+- 双语版保持输入页数，逐页左原文、右译文；派生失败时不保留不完整 artifact 集合。
 
 ## Phase 5：任务流与模型配置
 
@@ -151,20 +153,25 @@ D950 前 10 页已经完成英译中端到端与 render 检查。该样例证明
 - 错误能区分 Key、endpoint、model、rate limit、network 与 pipeline 问题。
 - 重启应用后历史可恢复，运行中任务变为明确的中断状态。
 
-## Phase 6：macOS arm64 发布闭环
+## Phase 6：桌面端发布闭环
 
 ### 工作
 
 - 冻结 Python sidecar，Tauri 负责启动、健康等待、退出和异常回收。
 - 打包模型 manifest、catalog、SQLite migration 和许可证；大型模型与字体通过显式 resource-pack 安装进入 app-data。
-- 自有 R2/CDN、GitHub Release fallback、版本化 manifest 和不可变发布脚本已经接通；继续完成 PDF 资源安装的状态、进度、取消、重试与磁盘错误闭环。
+- 自有 R2/CDN、GitHub Release fallback、版本化 manifest、不可变发布脚本及 PDF 资源安装 UI/API 已接通；安装入口提供状态、进度、取消、重试与磁盘错误闭环，普通任务 runtime 不隐式下载。
 - 完成代码签名、公证、升级和卸载策略。
+- 在 macOS arm64 与 Windows x64 目标机器各自冻结 sidecar 并构建安装包，不复用跨平台 Python runtime。
 - 在没有开发工具链的新用户机器做 clean-room smoke test。
 
 ### 验收门
 
-- DMG 安装、首次启动、模型配置、六种格式翻译、打开结果、升级和卸载全部通过。
+- macOS DMG 与 Windows NSIS 安装、首次启动、模型配置、六种格式翻译、打开结果、升级和卸载全部通过。
 - 运行时不依赖用户预装 Python、Node、Rust、Office 或 LibreOffice。
+
+### 当前状态
+
+PyInstaller onedir、Tauri resource sidecar、随机端口、stdin boot token、ready handshake 和 child 退出回收已经接通。PDF native runtime 也从 sidecar ready 路径延迟到首个 PDF job。本机已生成 ad-hoc `.app`/`.dmg`，验证 arm64 架构、深度签名结构、DMG checksum、原生白底安装布局、无多余卷图标、包内不含 ONNX/字体、loopback health 和应用退出后无 orphan sidecar。Windows x64 已增加原生 runner workflow，会运行 backend 测试、冻结 sidecar health smoke 并生成 NSIS `.exe`。`0.1.0-beta` 明确作为未签名、未公证的公开测试版；Developer ID、notarization/stapling、Windows code signing 与无开发工具链机器上的六格式 clean-room 翻译仍属正式发布门。
 
 ## Phase 7：扫描件与 OCR（v0.1 之后）
 
@@ -176,7 +183,7 @@ D950 前 10 页已经完成英译中端到端与 render 检查。该样例证明
 ## 最近下一步
 
 1. 扩充 PDF golden corpus，覆盖旋转页、竖排、复杂表格、字体缺失、坐标溢出、混合语言与不同生成器；外部样例只读使用，不提交到仓库。
-2. 实现 PDF resource-pack 安装 API/UI，并在 clean-room macOS 包中验证模型、checksum、ONNX Runtime 动态库、字体与应用更新后的复用路径。
+2. 在 clean-room macOS 与 Windows 包中验证 PDF 模型、checksum、ONNX Runtime 动态库、字体、主源故障时的 GitHub fallback，以及应用更新后的 resource-pack 复用路径。
 3. 对同一 model 启动多个真实 job，验证单 job 6、跨 job 15、rate limit retry 释放 slot，以及原序 progress contract。
-4. 完成 sidecar 生命周期、随机端口与 boot token 的 Tauri 闭环。
+4. 配置 Developer ID、notarization/stapling、Windows code signing 与正式 release build；在干净目标机器测冷启动、内存、首次资源下载和退出回收。
 5. 保持扫描件 OCR 和图片翻译为 v0.1 之后的独立能力，不向文本型 PDF pipeline 塞入隐式 fallback。

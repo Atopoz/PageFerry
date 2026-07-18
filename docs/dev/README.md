@@ -17,7 +17,7 @@
 ## 当前结论
 
 - 产品形态：Tauri 桌面客户端，本地优先；Web 端不进入首版。
-- 当前可用格式：DOCX、PPTX、XLSX、TXT、Markdown、原生文本型 PDF。PDF 不做 OCR 或图片翻译；没有可用文本层时返回稳定错误。
+- 当前可用格式：DOCX、PPTX、XLSX、TXT、Markdown、原生文本型 PDF。PDF 不做 OCR 或图片翻译；没有可用文本层时返回稳定错误，可选复用同一次译文生成逐页左原文、右译文的双语 PDF。
 - 本地服务：Python + FastAPI；界面：React + Vite + Tailwind CSS v4；原生壳：Tauri 2，macOS 使用 native overlay titlebar 和可拖动顶部区域。
 - 前端主路径：文件翻译、历史记录、模型供应商三个独立页面；文件页只显示当前 renderer session 的任务，provider 页使用二栏布局。
 - Provider：首发只提供 DeepSeek、Kimi、Zhipu GLM、MiniMax、Xiaomi MiMo；API Key 行内检测只做临时 inference，显式保存才会验证并原子写入配置。首次保存默认启用当次完整 model inventory，之后可逐项关闭；provider 暂停与“移除配置”分离，前者保留 Key、inventory 和 runtime settings。用户也可手动登记默认 disabled 的 model；已有 Key 可显式幂等 sync remote extras，但不会把 manual model 标为 unavailable，也不改 enabled/default、probe 或 runtime settings。
@@ -29,4 +29,4 @@
 - Module：`backend/modules/plain_text/`、`docx/`、`pptx/`、`xlsx/`、`pdf/` 独立维护；PDF 业务代码在 `modules/pdf/` 平铺，`pdfminerex` 作为有来源与许可证记录的 vendor fork 单独管理。
 - PDF Layout：PP-DocLayoutV3 通过 ONNX Runtime CPU 运行；模型由 manifest 固定，版本化模型与字体以 `assets.pageferry.download` 为主源、公开 GitHub Release 为 fallback 显式安装，runtime 不自动下载。header/footer 按普通原生文本翻译，不使用样例专属坐标启发式。
 - 首版不做：预览、扫描 PDF、图像翻译、GPU、企业账号、租户、计费、PostgreSQL、Redis、Celery。
-- 六种文档 pipeline、五个常驻 preset、OpenAI-compatible 自定义 provider、catalog sync 与 model runtime settings contract 正在收口；PDF 的核心路径已经通过 D950 端到端验证，R2/CDN 与 GitHub fallback 资源交付已接通，但安装 UI 与 Python sidecar 尚未打包，仍不能称为可分发版本。
+- 六种文档 pipeline、五个常驻 preset、OpenAI-compatible 自定义 provider、catalog sync 与 model runtime settings contract 正在收口；PDF 的核心路径已经通过 D950 端到端验证，R2/CDN、GitHub fallback 与显式资源安装 UI/API 已接通。Python sidecar 已完成 macOS arm64 本地冻结和 Tauri 生命周期 smoke，ad-hoc `.app`/`.dmg` 也能真实启动，但尚未经过 Developer ID 签名、公证、clean-room 与完整发布验收，仍不能称为公开可分发版本。

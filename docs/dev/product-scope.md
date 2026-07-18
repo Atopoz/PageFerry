@@ -39,10 +39,11 @@ React 和本地 HTTP contract 仍保持独立，将来若要做 Web 版可以复
 - 用户可以用显示名与 Base URL 创建 OpenAI-compatible 自定义 provider。
 - 本地任务状态、进度、失败原因和历史记录。
 - DOCX 可选一次翻译同时生成译文版与段内原文-译文双语版。
+- PDF 可选一次翻译同时生成译文版与拼接式双语版；双语页固定左原文、右译文，不做页内双语。
 - 每个输出 artifact 可以用系统默认应用打开、在文件夹中定位或选择应用打开。
-- macOS Apple Silicon 安装包作为第一个发布目标。
+- `0.1.0-beta` 同时提供 macOS Apple Silicon DMG 与 Windows x64 NSIS 安装包；两者都必须在对应平台冻结 sidecar。
 
-当前文件选择器、拖放校验和 job 入口接受 DOCX、PPTX、XLSX、TXT、Markdown、PDF。PDF 只承诺翻译已有文本层；header/footer 与正文一样进入翻译，混合文档中的图片和扫描页保持原样，整份文档没有可用文本时明确失败。
+当前文件选择器、拖放校验和 job 入口接受 DOCX、PPTX、XLSX、TXT、Markdown、PDF。PDF 只承诺翻译已有文本层；header/footer 与正文一样进入翻译，混合文档中的图片和扫描页保持原样，整份文档没有可用文本时明确失败。PDF 双语输出只做整页左右拼接，不把两种语言重新排进同一页内容流。
 
 ### 明确不进入首版
 
@@ -120,4 +121,4 @@ PageFerry/
 - 任意失败都不会损坏原文件，并能清理或标识残留 workspace。
 - 应用重启后可以恢复任务历史；没有 durable worker 的阶段，遗留 queued/running 任务都会转成可解释的中断状态。
 - 除用户选择的 LLM endpoint 外，核心翻译不依赖 PageFerry 远程服务。
-- 在目标 macOS 机器上通过安装、首次启动、翻译、打开结果和卸载 smoke test。
+- 在目标 macOS 与 Windows 机器上分别通过安装、首次启动、翻译、打开结果和卸载 smoke test。
