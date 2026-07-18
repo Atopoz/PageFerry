@@ -28,6 +28,7 @@ DEFAULT_WRANGLER_COMMAND = "wrangler"
 R2_CACHE_CONTROL = "public, max-age=31536000, immutable"
 DEFAULT_FETCH_TIMEOUT = 300.0
 CHUNK_SIZE = 1024 * 1024
+_PUBLIC_VERIFY_ATTEMPTS = 3
 _R2_BUCKET_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])\Z")
 
 if str(BACKEND_ROOT) not in sys.path:
@@ -68,6 +69,10 @@ Fetcher = Callable[..., PublicResponse]
 
 class R2PublishError(RuntimeError):
     """表示发布前校验、R2 查询或上传失败。"""
+
+
+class _R2PublicBodyMismatch(R2PublishError):
+    """表示公网 body 在一次传输中未通过 size 或 SHA-256 校验。"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -355,7 +360,26 @@ def _inspect_public_object(
     fetcher: Fetcher,
     timeout: float,
 ) -> bool:
-    """用带随机 query 的公网 GET 流式校验对象, 只有 404 表示缺失。"""
+    """重试公网 body 校验, 避免把偶发截断误判为不可变对象冲突。"""
+
+    last_mismatch: _R2PublicBodyMismatch | None = None
+    for _attempt in range(_PUBLIC_VERIFY_ATTEMPTS):
+        try:
+            return _inspect_public_object_once(item, fetcher=fetcher, timeout=timeout)
+        except _R2PublicBodyMismatch as error:
+            last_mismatch = error
+    if last_mismatch is None:
+        raise R2PublishError(f"R2 公网对象校验没有产生结果: {item.public_url}")
+    raise R2PublishError(str(last_mismatch)) from last_mismatch
+
+
+def _inspect_public_object_once(
+    item: R2PublishObject,
+    *,
+    fetcher: Fetcher,
+    timeout: float,
+) -> bool:
+    """用带随机 query 的单次公网 GET 流式校验对象, 只有 404 表示缺失。"""
 
     request = Request(
         _cache_busted_url(item.public_url),
@@ -401,9 +425,13 @@ def _verify_public_body(response: PublicResponse, item: R2PublishObject) -> None
         digest.update(chunk)
         size += len(chunk)
         if size > item.size_bytes:
-            raise R2PublishError(f"R2 不可变对象内容冲突, 拒绝覆盖: {item.public_url}")
+            raise _R2PublicBodyMismatch(
+                f"R2 不可变对象内容冲突, 拒绝覆盖: {item.public_url}"
+            )
     if size != item.size_bytes or digest.hexdigest() != item.sha256:
-        raise R2PublishError(f"R2 不可变对象内容冲突, 拒绝覆盖: {item.public_url}")
+        raise _R2PublicBodyMismatch(
+            f"R2 不可变对象内容冲突, 拒绝覆盖: {item.public_url}"
+        )
 
 
 def _cache_busted_url(url: str) -> str:

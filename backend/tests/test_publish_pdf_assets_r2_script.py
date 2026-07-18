@@ -239,6 +239,41 @@ def test_public_200_objects_are_streamed_and_reused_without_put(tmp_path: Path) 
     assert len(endpoint.calls) == len(expected)
 
 
+def test_truncated_public_body_is_retried_before_declaring_conflict(tmp_path: Path) -> None:
+    """第一次公网传输被截断时应重新读取, 不能把完整远端对象误判成冲突。"""
+
+    manifest_path, source_dir, licenses_dir, expected = _write_fixture(tmp_path)
+    endpoint = FakePublicEndpoint(_public_objects(expected))
+    wrangler = FakeWrangler(endpoint)
+    first_url = urljoin(PUBLIC_BASE_URL, "layout/model.onnx")
+    truncated = True
+
+    def flaky_fetcher(request: Request, *, timeout: float) -> FakeResponse:
+        """只截断目标对象的第一次传输, 后续委托给完整公网 endpoint。"""
+
+        nonlocal truncated
+        parsed = urlsplit(request.full_url)
+        canonical_url = urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
+        if canonical_url == first_url and truncated:
+            truncated = False
+            return FakeResponse(200, b"model")
+        return endpoint(request, timeout=timeout)
+
+    results = publish_r2.publish_pdf_assets(
+        "test-bucket",
+        manifest_path,
+        source_dir,
+        licenses_dir,
+        wrangler_command=("fake-wrangler",),
+        runner=wrangler,
+        fetcher=flaky_fetcher,
+    )
+
+    assert all(not result.uploaded for result in results)
+    assert truncated is False
+    assert wrangler.calls == []
+
+
 def test_public_200_conflict_rejects_immutable_object(tmp_path: Path) -> None:
     """公网 200 返回不同内容时必须失败, 不能用 wrangler 覆盖。"""
 
