@@ -133,6 +133,138 @@ jobs:
           }
           Get-FileHash $installers[0].FullName -Algorithm SHA256
 
+      - name: Smoke test installed application
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem "tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          $installDirectory = Join-Path $env:RUNNER_TEMP "pageferry-installed"
+          $install = Start-Process `
+            -FilePath $installer.FullName `
+            -ArgumentList "/S", "/D=$installDirectory" `
+            -Wait `
+            -PassThru
+          if ($install.ExitCode -ne 0) {
+            throw "NSIS installer exited with code $($install.ExitCode)"
+          }
+
+          $applicationExecutable = Join-Path $installDirectory "PageFerry.exe"
+          if (-not (Test-Path $applicationExecutable)) {
+            throw "Installed PageFerry executable was not found"
+          }
+
+          Add-Type @"
+          using System;
+          using System.Runtime.InteropServices;
+          public static class PageFerryWindow {
+              [DllImport("user32.dll")]
+              public static extern bool PostMessage(
+                  IntPtr window,
+                  uint message,
+                  IntPtr wordParameter,
+                  IntPtr longParameter
+              );
+          }
+          "@
+
+          $application = $null
+          $sidecarProcessId = $null
+          try {
+            $application = Start-Process -FilePath $applicationExecutable -PassThru
+            $sidecar = $null
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              $application.Refresh()
+              if ($application.HasExited) {
+                throw "Installed PageFerry exited before its sidecar was ready"
+              }
+              $sidecar = Get-CimInstance Win32_Process `
+                -Filter "ParentProcessId = $($application.Id)" | `
+                Where-Object { $_.Name -eq "pageferry-backend.exe" } | `
+                Select-Object -First 1
+              if ($null -ne $sidecar) {
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($null -eq $sidecar) {
+              throw "Installed PageFerry did not start its sidecar"
+            }
+            $sidecarProcessId = [int]$sidecar.ProcessId
+
+            $connection = $null
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              $connection = Get-NetTCPConnection `
+                -OwningProcess $sidecarProcessId `
+                -State Listen `
+                -ErrorAction SilentlyContinue | `
+                Where-Object { $_.LocalAddress -eq "127.0.0.1" } | `
+                Select-Object -First 1
+              if ($null -ne $connection) {
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($null -eq $connection) {
+              throw "Installed PageFerry sidecar did not listen on loopback"
+            }
+
+            $health = Invoke-RestMethod "http://127.0.0.1:$($connection.LocalPort)/healthz"
+            if (
+              $health.code -ne "success" -or
+              $health.data.service -ne "pageferry-api" -or
+              $health.data.version -ne "0.1.0-beta"
+            ) {
+              throw "Installed PageFerry returned an invalid health response"
+            }
+
+            $windowHandle = [IntPtr]::Zero
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              $application.Refresh()
+              $windowHandle = $application.MainWindowHandle
+              if ($windowHandle -ne [IntPtr]::Zero) {
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($windowHandle -eq [IntPtr]::Zero) {
+              throw "Installed PageFerry did not create a main window"
+            }
+            if (-not [PageFerryWindow]::PostMessage(
+              $windowHandle,
+              0x0010,
+              [IntPtr]::Zero,
+              [IntPtr]::Zero
+            )) {
+              throw "Could not request PageFerry window close"
+            }
+            if (-not $application.WaitForExit(15000)) {
+              throw "Installed PageFerry did not exit after closing its window"
+            }
+
+            for ($attempt = 0; $attempt -lt 40; $attempt++) {
+              if ($null -eq (Get-Process -Id $sidecarProcessId -ErrorAction SilentlyContinue)) {
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($null -ne (Get-Process -Id $sidecarProcessId -ErrorAction SilentlyContinue)) {
+              throw "Installed PageFerry left its sidecar running after exit"
+            }
+          }
+          finally {
+            if ($null -ne $application) {
+              $application.Refresh()
+              if (-not $application.HasExited) {
+                Stop-Process -Id $application.Id -Force
+              }
+            }
+            if (
+              $null -ne $sidecarProcessId -and
+              $null -ne (Get-Process -Id $sidecarProcessId -ErrorAction SilentlyContinue)
+            ) {
+              Stop-Process -Id $sidecarProcessId -Force
+            }
+          }
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v7
         with:
