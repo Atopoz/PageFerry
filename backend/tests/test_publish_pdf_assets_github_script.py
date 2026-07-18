@@ -94,6 +94,7 @@ class FakeGh:
         exists: bool = False,
         draft: bool = True,
         assets: dict[str, dict[str, object]] | None = None,
+        invisible_api_reads: int = 0,
     ) -> None:
         """用可选 Release 状态初始化内存中的 GitHub 远端。"""
 
@@ -102,6 +103,7 @@ class FakeGh:
         self.assets = dict(assets or {})
         self.calls: list[list[str]] = []
         self.uploaded_names: list[str] = []
+        self.invisible_api_reads = invisible_api_reads
 
     def __call__(
         self,
@@ -143,7 +145,9 @@ class FakeGh:
         """返回 gh api --paginate --slurp 产生的分页 Release JSON。"""
 
         releases = []
-        if self.exists:
+        if self.exists and self.invisible_api_reads > 0:
+            self.invisible_api_reads -= 1
+        elif self.exists:
             releases.append(
                 {
                     "tag_name": TAG,
@@ -209,6 +213,30 @@ def test_missing_release_uploads_in_fixed_order_then_publishes_draft(tmp_path: P
     ]
 
 
+def test_new_draft_waits_for_release_list_eventual_consistency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """新 draft 暂时不在 list API 可见时应重试, 不能误判创建失败。"""
+
+    manifest_path, source_dir, licenses_dir, expected_order = _write_fixture(tmp_path)
+    runner = FakeGh(invisible_api_reads=1)
+    monkeypatch.setattr(publish_github.time, "sleep", lambda _seconds: None)
+
+    results = publish_github.publish_pdf_assets(
+        REPO,
+        TAG,
+        manifest_path=manifest_path,
+        source_dir=source_dir,
+        licenses_dir=licenses_dir,
+        runner=runner,
+    )
+
+    assert [result.name for result in results] == list(expected_order)
+    assert runner.draft is False
+    assert runner.uploaded_names == list(expected_order)
+
+
 def test_matching_published_release_assets_are_reused_without_writes(tmp_path: Path) -> None:
     """published Release 的 size 与 digest 全匹配时只读取并复用。"""
 
@@ -240,6 +268,7 @@ def test_matching_published_release_assets_are_reused_without_writes(tmp_path: P
 )
 def test_existing_asset_conflict_fails_before_any_upload(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     field: str,
     bad_value: object,
 ) -> None:
@@ -256,12 +285,13 @@ def test_existing_asset_conflict_fails_before_any_upload(
     remote = _remote_assets(assets)
     remote[assets[0].name][field] = bad_value
     runner = FakeGh(exists=True, draft=True, assets=remote)
+    monkeypatch.setattr(publish_github.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(publish_github.GitHubPublishError, match="内容冲突"):
         publish_github.publish_plan(REPO, TAG, manifest, assets, runner=runner)
 
     assert runner.uploaded_names == []
-    assert len(runner.calls) == 1
+    assert all(command[:2] == ["gh", "api"] for command in runner.calls)
 
 
 def test_invalid_local_asset_stops_before_any_gh_call(tmp_path: Path) -> None:

@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,8 @@ _GITHUB_REPO_RE = re.compile(
     r"/[A-Za-z0-9](?:[A-Za-z0-9._-]{0,99})\Z"
 )
 _GITHUB_TAG_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,127})\Z")
+_RELEASE_READ_ATTEMPTS = 10
+_RELEASE_READ_DELAY_SECONDS = 1.0
 
 
 class GitHubPublishError(RuntimeError):
@@ -149,9 +152,18 @@ def publish_plan(
     release = _fetch_release(repo, tag, runner=runner)
     if release is None:
         _create_draft_release(repo, tag, manifest.pack_revision, runner=runner)
-        release = _fetch_release(repo, tag, runner=runner)
+        # Release list 对刚创建的 draft 存在短暂最终一致性窗口, 不能因此重复创建。
+        release = _wait_for_release(repo, tag, runner=runner)
         if release is None:
             raise GitHubPublishError("GitHub draft Release 创建后仍无法读取")
+    elif any(asset.digest is None for asset in release.assets):
+        # GitHub 会异步计算 SHA-256 digest, 重跑时给它一个稳定窗口再判断冲突。
+        release = _wait_for_release(
+            repo,
+            tag,
+            runner=runner,
+            ready=lambda state: all(asset.digest is not None for asset in state.assets),
+        )
 
     existing = _remote_assets_by_name(release.assets)
     missing: list[GitHubPublishAsset] = []
@@ -175,14 +187,24 @@ def publish_plan(
         _upload_release_asset(repo, tag, asset, runner=runner)
         results_by_name[asset.name] = GitHubPublishResult(name=asset.name, uploaded=True)
 
-    confirmed_release = _fetch_release(repo, tag, runner=runner)
+    confirmed_release = _wait_for_release(
+        repo,
+        tag,
+        runner=runner,
+        ready=lambda state: _release_assets_are_complete(assets, state),
+    )
     if confirmed_release is None:
         raise GitHubPublishError("上传后无法读取 GitHub Release")
     _verify_complete_release(assets, confirmed_release)
 
     if confirmed_release.draft:
         _publish_draft_release(repo, tag, runner=runner)
-        published_release = _fetch_release(repo, tag, runner=runner)
+        published_release = _wait_for_release(
+            repo,
+            tag,
+            runner=runner,
+            ready=lambda state: not state.draft and _release_assets_are_complete(assets, state),
+        )
         if published_release is None or published_release.draft:
             raise GitHubPublishError("GitHub draft Release 未成功发布")
         _verify_complete_release(assets, published_release)
@@ -366,6 +388,27 @@ def _fetch_release(repo: str, tag: str, *, runner: Runner) -> GitHubReleaseState
     return _parse_release_payload(matches[0], expected_tag=tag)
 
 
+def _wait_for_release(
+    repo: str,
+    tag: str,
+    *,
+    runner: Runner,
+    ready: Callable[[GitHubReleaseState], bool] | None = None,
+) -> GitHubReleaseState | None:
+    """在 GitHub 的短暂最终一致性窗口内等待 Release 达到可验证状态。"""
+
+    last_release: GitHubReleaseState | None = None
+    for attempt in range(_RELEASE_READ_ATTEMPTS):
+        release = _fetch_release(repo, tag, runner=runner)
+        if release is not None:
+            last_release = release
+            if ready is None or ready(release):
+                return release
+        if attempt + 1 < _RELEASE_READ_ATTEMPTS:
+            time.sleep(_RELEASE_READ_DELAY_SECONDS)
+    return last_release
+
+
 def _parse_release_payload(payload: object, *, expected_tag: str) -> GitHubReleaseState:
     """严格解析 GitHub Release API 中发布判断所需的最小字段。"""
 
@@ -436,6 +479,21 @@ def _verify_complete_release(
         if remote_asset is None:
             raise GitHubPublishError(f"GitHub Release 上传后仍缺少 asset: {asset.name}")
         _verify_remote_asset(asset, remote_asset)
+
+
+def _release_assets_are_complete(
+    assets: Sequence[GitHubPublishAsset],
+    release: GitHubReleaseState,
+) -> bool:
+    """判断计划内 asset 是否都已可见且 digest 已生成, 冲突仍立即报错。"""
+
+    remote_assets = _remote_assets_by_name(release.assets)
+    for asset in assets:
+        remote_asset = remote_assets.get(asset.name)
+        if remote_asset is None or remote_asset.digest is None:
+            return False
+        _verify_remote_asset(asset, remote_asset)
+    return True
 
 
 def _create_draft_release(
