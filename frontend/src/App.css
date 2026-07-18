@@ -2156,6 +2156,10 @@
   animation: dialog-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.pdf-resource-dialog:focus {
+  outline: none;
+}
+
 .pdf-resource-dialog > header {
   min-height: 76px;
   padding: 14px 12px 13px 18px;
@@ -2348,11 +2352,25 @@
   background: color-mix(in srgb, var(--surface-muted) 45%, var(--surface));
 }
 
-/* destructive 动作不沿用品牌色 focus 环，避免在取消按钮上留下绿色印记。 */
+/* footer 按钮使用 shadcn 的单层 ring，不再叠加全局 outline。 */
+.pdf-resource-dialog > footer .pdf-resource-action:focus-visible {
+  outline: none;
+}
+
+/* 次要动作只保留中性键盘 focus，不与主操作争抢品牌色。 */
+.pdf-resource-dialog
+  > footer
+  .pdf-resource-action[data-variant='outline']:focus-visible {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 2px rgb(23 27 29 / 12%);
+}
+
+/* destructive 动作使用危险色 focus，不沿用品牌色。 */
 .pdf-resource-dialog
   > footer
   .pdf-resource-action[data-variant='destructive']:focus-visible {
-  outline-color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
 /* 状态切换瞬间的 disabled 按钮不应保留上一动作的 focus 外观。 */

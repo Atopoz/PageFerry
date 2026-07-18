@@ -135,6 +135,7 @@ export function PdfResourceDialog({
   onCancel,
 }: PdfResourceDialogProps) {
   const { t } = useI18n();
+  const contentRef = useRef<HTMLDivElement>(null);
   const state = status?.state;
   const totalBytes = Math.max(0, status?.total_bytes ?? 0);
   const completedBytes = Math.min(
@@ -163,9 +164,16 @@ export function PdfResourceDialog({
       <Dialog.Portal>
         <Dialog.Overlay className="dialog-overlay" />
         <Dialog.Content
+          ref={contentRef}
           className="pdf-resource-dialog"
           data-state-value={state ?? 'checking'}
           aria-describedby="pdf-resource-description"
+          tabIndex={-1}
+          onOpenAutoFocus={(event) => {
+            // Radix 默认聚焦第一个按钮，会让“稍后再说”在弹窗刚打开时带上键盘 focus 环。
+            event.preventDefault();
+            contentRef.current?.focus({ preventScroll: true });
+          }}
         >
           <header>
             <div>

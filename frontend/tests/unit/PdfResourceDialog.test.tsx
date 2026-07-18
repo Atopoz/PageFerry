@@ -1,6 +1,6 @@
 /** 验证 PDF resource dialog 的进度、动作与稳定失败码文案。 */
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PdfResourceDialog } from '../../src/features/pdf-resources/PdfResourceDialog';
@@ -109,6 +109,15 @@ describe('PdfResourceDialog', () => {
     expect(screen.getAllByText('正在取消…').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: '正在取消' })).toBeDisabled();
     expect(screen.queryByRole('button', { name: '重新下载' })).toBeNull();
+  });
+
+  it('打开时聚焦弹窗内容，不给“稍后再说”强制加上 focus 环', async () => {
+    renderDialog(resourceStatus('missing'));
+
+    const dialog = screen.getByRole('dialog', { name: '准备 PDF 翻译' });
+    const laterButton = screen.getByRole('button', { name: '稍后再说' });
+    await waitFor(() => expect(dialog).toHaveFocus());
+    expect(laterButton).not.toHaveFocus();
   });
 
   it('切换动作时替换按钮节点，不把上一动作的 focus 与 active 外观带给新按钮', () => {
