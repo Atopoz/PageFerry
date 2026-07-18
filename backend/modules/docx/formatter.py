@@ -382,7 +382,10 @@ class DocxFormatter:
                 target.comment = source.comment
                 for info in source.infolist():
                     target.writestr(info, updated_parts.get(info.filename, source.read(info)))
-            with temporary.open("rb") as handle:
+            # Windows 不允许对只读文件描述符调用 fsync, 因此这里显式以可写模式
+            # 打开已经完成写入的临时包, 再把 ZIP 内容同步到磁盘。
+            with temporary.open("r+b") as handle:
+                handle.flush()
                 os.fsync(handle.fileno())
             # 临时 package 与目标同目录, os.replace 才不会跨文件系统失去原子性。
             os.replace(temporary, package_path)

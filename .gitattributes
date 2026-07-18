@@ -1,0 +1,2 @@
+# migration checksum 按原始 bytes 固定，Windows checkout 也必须保留 LF。
+*.sql text eol=lf

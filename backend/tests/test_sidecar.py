@@ -32,6 +32,7 @@ def test_sidecar_announces_dynamic_port_and_serves_health(tmp_path: Path) -> Non
         stderr=subprocess.PIPE,
         text=True,
     )
+    terminated_by_test = False
     try:
         assert process.stdin is not None
         process.stdin.write(f"{token}\n")
@@ -52,15 +53,21 @@ def test_sidecar_announces_dynamic_port_and_serves_health(tmp_path: Path) -> Non
             payload = json.load(response)
         assert payload["data"]["service"] == "pageferry-api"
     finally:
-        process.terminate()
+        if process.poll() is None:
+            terminated_by_test = True
+            process.terminate()
         try:
             process.wait(timeout=10)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
 
-    # Uvicorn 完成 lifespan shutdown 后会重新抛出捕获到的 SIGTERM，保留真实退出原因。
-    assert process.returncode in {0, -signal.SIGTERM}
+    # POSIX 上 Uvicorn 会保留 SIGTERM；Windows 的 Popen.terminate 则直接使用
+    # TerminateProcess，并按 Python contract 把退出码设为 1。
+    expected_return_codes = {0, -signal.SIGTERM}
+    if sys.platform == "win32" and terminated_by_test:
+        expected_return_codes.add(1)
+    assert process.returncode in expected_return_codes
     assert process.stderr is not None
     assert token not in process.stderr.read()
 
