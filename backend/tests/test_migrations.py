@@ -61,6 +61,9 @@ PUBLISHED_MIGRATION_CHECKSUMS = {
     "0019_provider_active_state.sql": (
         "9a1a6a55812e63e1c0f32a09df3ee39e4f2c3648482671baaee035b1f328fa25"
     ),
+    "0020_job_artifacts_and_xlsx.sql": (
+        "b8c95631e126296044810d94823d00c251cd4fc3e89e4963d9d5ec27ab139963"
+    ),
 }
 
 LEGACY_SCHEMA = """
