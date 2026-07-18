@@ -19,6 +19,7 @@ from modules.pdf.extractor import LAYOUT_BEHAVIOR_LAYOUT, ParagraphExtractor, ge
 from modules.pdf.layout import LayoutDetector, LayoutModelError
 from modules.pdf.pipeline import PdfPipeline
 from modules.pdf.rasterizer import PDFToImageConverter
+from modules.pdf.side_by_side_composer import PdfSideBySideComposer
 from modules.translation.contracts import (
     TranslationBatchItem,
     TranslationBatchResult,
@@ -103,6 +104,54 @@ class BrokenMarkerTranslator(ReplacingTranslator):
         del texts, source_language, target_language, format_hint
         del read_only_context, repair_candidates
         return TranslationBatchResult(items=(TranslationBatchItem(index=0, text="你好，世界"),))
+
+
+class CountingTranslator(ReplacingTranslator):
+    """记录 PDF pipeline 调用模型 batch 的次数。"""
+
+    def __init__(self) -> None:
+        """初始化空调用计数。"""
+
+        self.calls = 0
+
+    def translate_batch(
+        self,
+        *,
+        texts: Sequence[str],
+        source_language: str | None,
+        target_language: str,
+        format_hint: str,
+        read_only_context: Sequence[str] = (),
+        repair_candidates: Sequence[str] = (),
+    ) -> TranslationBatchResult:
+        """记录调用后复用 marker-preserving 译文。"""
+
+        self.calls += 1
+        return super().translate_batch(
+            texts=texts,
+            source_language=source_language,
+            target_language=target_language,
+            format_hint=format_hint,
+            read_only_context=read_only_context,
+            repair_candidates=repair_candidates,
+        )
+
+
+class FailingSideBySideComposer(PdfSideBySideComposer):
+    """模拟双语派生阶段失败的 composer。"""
+
+    def compose(
+        self,
+        source_pdf_path: str | Path,
+        translated_pdf_path: str | Path,
+        output_path: str | Path,
+    ) -> None:
+        """在收到三条合法路径后中断合成。"""
+
+        assert Path(source_pdf_path).is_file()
+        assert Path(translated_pdf_path).is_file()
+        assert Path(output_path).suffix == ".pdf"
+        raise RuntimeError("compose_failed")
 
 
 class RecordingSession:
@@ -367,6 +416,65 @@ def test_pdf_pipeline_translates_text_without_changing_source(
         TranslationProgress(stage="translating", processed_segments=1, total_segments=1),
         TranslationProgress(stage="formatting", processed_segments=1, total_segments=1),
     ]
+
+
+def test_pdf_pipeline_bilingual_derives_side_by_side_artifact_without_translating_twice(
+    tmp_path: Path,
+    pdf_font_directory: Path,
+) -> None:
+    """双语开关应复用译文 PDF，交付译文版和左右拼页版两个 artifact。"""
+
+    source = tmp_path / "source.pdf"
+    _write_text_pdf(source)
+    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    translator = CountingTranslator()
+
+    result = PdfPipeline(
+        translator,
+        EmptyLayoutDetector(),
+        font_directory=pdf_font_directory,
+        bilingual=True,
+    ).translate(_request(source, tmp_path / "outputs"))
+
+    assert translator.calls == 1
+    assert [artifact.kind for artifact in result.artifacts] == ["translated", "bilingual"]
+    translated, bilingual = (artifact.path for artifact in result.artifacts)
+    assert translated == result.output_path
+    assert translated.name == "source.zh-CN.pdf"
+    assert bilingual.name == "source.bilingual-zh-CN.pdf"
+    assert "你好，世界" in extract_text(str(translated))
+    bilingual_text = extract_text(str(bilingual))
+    assert "Hello world" in bilingual_text
+    assert "你好，世界" in bilingual_text
+    with pikepdf.Pdf.open(source) as source_pdf, pikepdf.Pdf.open(bilingual) as bilingual_pdf:
+        assert len(bilingual_pdf.pages) == len(source_pdf.pages)
+        assert list(bilingual_pdf.pages[0].mediabox) == [0, 0, 1248, 792]
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
+
+
+def test_pdf_pipeline_removes_both_artifacts_when_bilingual_composition_fails(
+    tmp_path: Path,
+    pdf_font_directory: Path,
+) -> None:
+    """左右拼页失败时不得留下已完成的译文版或残缺双语版。"""
+
+    source = tmp_path / "source.pdf"
+    _write_text_pdf(source)
+    source_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    output_dir = tmp_path / "outputs"
+
+    with pytest.raises(RuntimeError, match="compose_failed"):
+        PdfPipeline(
+            ReplacingTranslator(),
+            EmptyLayoutDetector(),
+            font_directory=pdf_font_directory,
+            bilingual=True,
+            side_by_side_composer=FailingSideBySideComposer(),
+        ).translate(_request(source, output_dir))
+
+    assert not (output_dir / "source.zh-CN.pdf").exists()
+    assert not (output_dir / "source.bilingual-zh-CN.pdf").exists()
+    assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
 
 
 def test_pdf_pipeline_rejects_missing_font_pack_before_provider_call(tmp_path: Path) -> None:

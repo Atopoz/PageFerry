@@ -239,6 +239,123 @@ def test_docx_bilingual_option_returns_two_artifacts(tmp_path: Path) -> None:
     ]
 
 
+def test_pdf_bilingual_path_option_is_snapshotted_and_reaches_pipeline(
+    tmp_path: Path,
+) -> None:
+    """PDF path 入口必须冻结拼接式双语开关并交给 pipeline factory。"""
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n%%EOF")
+    data_dir = tmp_path / "app-data"
+    app = create_app(Settings(data_dir=data_dir))
+    factory = RecordingPipelineFactory()
+    app.state.translation_job_service = TranslationJobService(
+        JobRepository(data_dir / "pageferry.sqlite3"),
+        ApiResolver(),
+        workspace_dir=data_dir / "workspace",
+        output_dir=data_dir / "outputs",
+        pipeline_factory=factory,
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/jobs",
+            json={
+                "source_path": str(source),
+                "source_language": "en",
+                "target_language": "zh-CN",
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-flash",
+                "options": {"kind": "pdf", "bilingual": True},
+            },
+        )
+
+    assert created.status_code == 202
+    assert created.json()["options"] == {"kind": "pdf", "bilingual": True}
+    assert factory.options is not None
+    assert factory.options.kind == "pdf"
+    assert factory.options.bilingual is True
+
+
+def test_pdf_bilingual_upload_option_is_snapshotted(tmp_path: Path) -> None:
+    """PDF multipart 入口必须解析同一份拼接式双语 contract。"""
+
+    data_dir = tmp_path / "app-data"
+    app = create_app(Settings(data_dir=data_dir))
+    factory = RecordingPipelineFactory()
+    app.state.translation_job_service = TranslationJobService(
+        JobRepository(data_dir / "pageferry.sqlite3"),
+        ApiResolver(),
+        workspace_dir=data_dir / "workspace",
+        output_dir=data_dir / "outputs",
+        pipeline_factory=factory,
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/jobs/upload",
+            files={"file": ("source.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+            data={
+                "source_language": "en",
+                "target_language": "zh-CN",
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-flash",
+                "options": '{"kind":"pdf","bilingual":true}',
+            },
+        )
+
+    assert created.status_code == 202
+    assert created.json()["options"] == {"kind": "pdf", "bilingual": True}
+    assert factory.options is not None
+    assert factory.options.kind == "pdf"
+    assert factory.options.bilingual is True
+
+
+def test_pdf_options_reject_unexposed_layout_modes(tmp_path: Path) -> None:
+    """path 与 multipart 都不能接收未公开的页内双语布局字段。"""
+
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"%PDF-1.4\n%%EOF")
+    data_dir = tmp_path / "app-data"
+    app = create_app(Settings(data_dir=data_dir))
+    app.state.translation_job_service = _test_job_service(data_dir)
+    payload = {
+        "source_path": str(source),
+        "source_language": "en",
+        "target_language": "zh-CN",
+        "provider_id": "deepseek",
+        "model_id": "deepseek-v4-flash",
+    }
+
+    with TestClient(app) as client:
+        path_response = client.post(
+            "/api/v1/jobs",
+            json={
+                **payload,
+                "options": {
+                    "kind": "pdf",
+                    "bilingual": True,
+                    "inline_stack": True,
+                },
+            },
+        )
+        upload_response = client.post(
+            "/api/v1/jobs/upload",
+            files={"file": ("source.pdf", b"%PDF-1.4\n%%EOF", "application/pdf")},
+            data={
+                "source_language": "en",
+                "target_language": "zh-CN",
+                "provider_id": "deepseek",
+                "model_id": "deepseek-v4-flash",
+                "options": '{"kind":"pdf","bilingual":true,"side_by_side":true}',
+            },
+        )
+
+    assert path_response.status_code == 422
+    assert upload_response.status_code == 400
+    assert upload_response.json()["code"] == "invalid_document_options"
+
+
 def test_path_job_api_runs_in_background_and_hides_source_path(tmp_path: Path) -> None:
     """POST 返回 queued snapshot, 随后 GET 可见成功且不泄露源路径。"""
 

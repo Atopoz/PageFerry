@@ -15,6 +15,7 @@ from pypdfium2 import PdfiumError
 
 from modules.translation.contracts import (
     BatchTranslator,
+    TranslationArtifact,
     TranslationProgress,
     TranslationProgressReporter,
     TranslationRequest,
@@ -30,6 +31,7 @@ from .formatter import build_tagged_text_blocks
 from .layout import LayoutDetector, LayoutModelError
 from .rasterizer import page_image_coverage_ratios
 from .renderer import FillOptions, FillRenderMode, ParagraphRenderer
+from .side_by_side_composer import PdfSideBySideComposer
 from .translator import ParagraphTranslator
 
 _SAFE_LANGUAGE_RE = re.compile(r"[^A-Za-z0-9_-]+")
@@ -54,12 +56,16 @@ class PdfPipeline:
         layout_detector: LayoutDetector,
         *,
         font_directory: Path,
+        bilingual: bool = False,
+        side_by_side_composer: PdfSideBySideComposer | None = None,
     ) -> None:
-        """绑定 translator、app-scoped layout detector 与外置字体目录。"""
+        """绑定 translator、layout detector、字体目录与左右拼页开关。"""
 
         self._translator = translator
         self._layout_detector = layout_detector
         self._font_directory = font_directory.expanduser().resolve()
+        self._bilingual = bilingual
+        self._side_by_side_composer = side_by_side_composer or PdfSideBySideComposer()
 
     def translate(
         self,
@@ -71,7 +77,12 @@ class PdfPipeline:
 
         source = request.source_path.resolve()
         output = self._output_path(request)
+        bilingual_output = self._bilingual_output_path(request) if self._bilingual else None
         self._validate_paths(source, output)
+        if bilingual_output is not None:
+            self._validate_paths(source, bilingual_output)
+            if bilingual_output.resolve() == output.resolve():
+                raise ValueError("pdf_artifact_paths_collide")
         if not self._font_directory.is_dir():
             raise PdfPipelineError(PDF_FONT_DIRECTORY_MISSING)
         source_digest = _file_sha256(source)
@@ -164,9 +175,23 @@ class PdfPipeline:
             warning_codes.append("pdf_chunk_fallback")
         if extractor.layout_fallback_used:
             warning_codes.append("pdf_layout_fallback")
+        artifacts = [TranslationArtifact(kind="translated", path=output)]
+        if bilingual_output is not None:
+            try:
+                # 双语版只复用已经落盘的译文 PDF, 不能再次调用模型或启用页内堆叠渲染。
+                self._side_by_side_composer.compose(source, output, bilingual_output)
+                if _file_sha256(source) != source_digest:
+                    raise ValueError("source_pdf_changed_during_bilingual_composition")
+            except Exception:
+                # 请求的两个派生文件必须完整交付, 双语合成失败时不留下半套结果。
+                output.unlink(missing_ok=True)
+                bilingual_output.unlink(missing_ok=True)
+                raise
+            artifacts.append(TranslationArtifact(kind="bilingual", path=bilingual_output))
         return TranslationResult(
             output_path=output,
             document_kind="pdf",
+            artifacts=tuple(artifacts),
             translated_segments=total_chunks - fallback_chunks,
             fallback_segments=fallback_chunks,
             warning_codes=tuple(warning_codes),
@@ -178,6 +203,13 @@ class PdfPipeline:
         language = _SAFE_LANGUAGE_RE.sub("-", request.target_language).strip("-")
         language = language or "translated"
         return request.output_dir / f"{request.source_path.stem}.{language}.pdf"
+
+    def _bilingual_output_path(self, request: TranslationRequest) -> Path:
+        """生成与译文版同目录且不会覆盖源文件的双语输出路径。"""
+
+        language = _SAFE_LANGUAGE_RE.sub("-", request.target_language).strip("-")
+        language = language or "translated"
+        return request.output_dir / f"{request.source_path.stem}.bilingual-{language}.pdf"
 
     @staticmethod
     def _validate_paths(source: Path, output: Path) -> None:

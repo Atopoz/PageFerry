@@ -2140,6 +2140,227 @@
   animation: dialog-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.pdf-resource-dialog {
+  width: min(460px, calc(100vw - 36px));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 110;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--surface);
+  box-shadow: 0 24px 70px rgb(18 33 40 / 20%);
+  transform: translate(-50%, -50%);
+  animation: dialog-in 170ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.pdf-resource-dialog > header {
+  min-height: 76px;
+  padding: 14px 12px 13px 18px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.pdf-resource-dialog > header > div {
+  min-width: 0;
+}
+
+.pdf-resource-dialog h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 720;
+  letter-spacing: -0.01em;
+}
+
+.pdf-resource-dialog header p {
+  max-width: 360px;
+  margin: 4px 0 0;
+  color: var(--quiet);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.pdf-resource-body {
+  padding: 6px 18px 12px;
+}
+
+.pdf-resource-checking {
+  min-height: 92px;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--quiet);
+  font-size: 11px;
+}
+
+.pdf-resource-checking svg {
+  width: 15px;
+  height: 15px;
+}
+
+.pdf-resource-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pdf-resource-row {
+  min-height: 58px;
+  border-bottom: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.pdf-resource-state-mark {
+  width: 7px;
+  height: 7px;
+  border: 1px solid #aab3b6;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.pdf-resource-state-mark--downloading {
+  border-color: var(--brand);
+  background: var(--brand);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.pdf-resource-state-mark--cancelling {
+  border-color: var(--brand);
+  background: var(--surface);
+  box-shadow: 0 0 0 3px var(--brand-soft);
+}
+
+.pdf-resource-state-mark--ready {
+  border-color: var(--success);
+  background: var(--success);
+}
+
+.pdf-resource-state-mark--failed {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.pdf-resource-state-mark--cancelled {
+  border-color: var(--ink-faint);
+  background: var(--ink-faint);
+}
+
+.pdf-resource-row-copy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.pdf-resource-row-copy strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 660;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-resource-row-copy small,
+.pdf-resource-row-status {
+  color: var(--quiet);
+  font-size: 9px;
+}
+
+.pdf-resource-row-status {
+  padding-left: 10px;
+  white-space: nowrap;
+}
+
+.pdf-resource-progress-block {
+  padding-top: 13px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.pdf-resource-progress-track {
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--surface-muted);
+  box-shadow: 0 0 0 1px var(--line) inset;
+}
+
+.pdf-resource-progress-track > span {
+  width: 0;
+  height: 100%;
+  display: block;
+  border-radius: inherit;
+  background: var(--brand);
+  transition: width 180ms ease;
+}
+
+.pdf-resource-progress-block > small {
+  min-width: 78px;
+  color: var(--quiet);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-align: right;
+}
+
+.pdf-resource-message {
+  margin: 11px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.pdf-resource-message svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.pdf-resource-message--attention {
+  color: var(--danger);
+}
+
+.pdf-resource-message--ready {
+  color: var(--success);
+}
+
+.pdf-resource-dialog > footer {
+  min-height: 58px;
+  padding: 10px 18px 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  background: color-mix(in srgb, var(--surface-muted) 45%, var(--surface));
+}
+
+/* destructive 动作不沿用品牌色 focus 环，避免在取消按钮上留下绿色印记。 */
+.pdf-resource-dialog
+  > footer
+  .pdf-resource-action[data-variant='destructive']:focus-visible {
+  outline-color: var(--danger);
+}
+
+/* 状态切换瞬间的 disabled 按钮不应保留上一动作的 focus 外观。 */
+.pdf-resource-dialog > footer .pdf-resource-action:disabled:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .provider-custom-dialog > header,
 .model-settings-dialog > header {
   min-height: 62px;

@@ -1,10 +1,16 @@
 /** 验证三页信息架构、任务创建、高级选项与 provider 配置。 */
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '../../src/App';
-import type { TranslationJob } from '../../src/lib/api';
+import type { PdfResourceStatus, TranslationJob } from '../../src/lib/api';
 
 const catalog = {
   schema_version: 1,
@@ -139,6 +145,42 @@ function translationJob(
   };
 }
 
+const layoutResourceBytes = 128 * 1024 * 1024;
+const fontResourceBytes = 22 * 1024 * 1024;
+
+/** 构造 PDF resource pack 的稳定进度快照。 */
+function pdfResourceStatus(
+  state: PdfResourceStatus['state'] = 'ready',
+  completedBytes = state === 'ready'
+    ? layoutResourceBytes + fontResourceBytes
+    : 0,
+  errorCode: string | null = null,
+): PdfResourceStatus {
+  const fontCompleted = Math.max(0, completedBytes - layoutResourceBytes);
+  return {
+    pack_revision: '2026.07.18.1',
+    state,
+    total_bytes: layoutResourceBytes + fontResourceBytes,
+    completed_bytes: completedBytes,
+    current_asset_id: state === 'downloading' ? 'pp-doclayout-v3-onnx' : null,
+    error_code: errorCode,
+    resources: [
+      {
+        pack: 'layout',
+        size_bytes: layoutResourceBytes,
+        completed_bytes: Math.min(completedBytes, layoutResourceBytes),
+        ready: completedBytes >= layoutResourceBytes,
+      },
+      {
+        pack: 'fonts-common-zh-cn',
+        size_bytes: fontResourceBytes,
+        completed_bytes: Math.min(fontCompleted, fontResourceBytes),
+        ready: fontCompleted >= fontResourceBytes,
+      },
+    ],
+  };
+}
+
 /** 打开一个 Radix Select 并选择可访问名称匹配的 option。 */
 async function chooseSelectOption(label: string, optionName: string) {
   const trigger = screen.getByRole('combobox', { name: label });
@@ -163,6 +205,9 @@ describe('App', () => {
   let deleteCompleted: boolean;
   let failProviderRefreshAfterDelete: boolean;
   let healthAvailable: boolean;
+  let pdfResources: PdfResourceStatus;
+  let pdfResourcePollQueue: PdfResourceStatus[];
+  let pdfResourceGetFailuresRemaining: number;
 
   beforeEach(() => {
     vi.spyOn(window.navigator, 'languages', 'get').mockReturnValue(['zh-CN']);
@@ -173,6 +218,9 @@ describe('App', () => {
     deleteCompleted = false;
     failProviderRefreshAfterDelete = false;
     healthAvailable = true;
+    pdfResources = pdfResourceStatus();
+    pdfResourcePollQueue = [];
+    pdfResourceGetFailuresRemaining = 0;
     lastProviderMutation = null;
     discoveryModels = [
       {
@@ -198,10 +246,36 @@ describe('App', () => {
         }
         return jsonResponse({
           code: 'success',
-          data: { service: 'pageferry-api', version: '0.1.0' },
+          data: { service: 'pageferry-api', version: '0.1.0-beta' },
         });
       }
       if (url.endsWith('/api/v1/model-catalog')) return jsonResponse(catalog);
+      if (
+        url.endsWith('/api/v1/pdf-resources/install') &&
+        init?.method === 'POST'
+      ) {
+        pdfResources = pdfResourceStatus('downloading');
+        return jsonResponse({ data: pdfResources });
+      }
+      if (
+        url.endsWith('/api/v1/pdf-resources/cancel') &&
+        init?.method === 'POST'
+      ) {
+        pdfResources = {
+          ...pdfResources,
+          state: 'cancelling',
+          current_asset_id: null,
+        };
+        return jsonResponse({ data: pdfResources });
+      }
+      if (url.endsWith('/api/v1/pdf-resources') && init?.method === undefined) {
+        if (pdfResourceGetFailuresRemaining > 0) {
+          pdfResourceGetFailuresRemaining -= 1;
+          return jsonResponse({ message: 'resource status unavailable' }, 503);
+        }
+        pdfResources = pdfResourcePollQueue.shift() ?? pdfResources;
+        return jsonResponse({ data: pdfResources });
+      }
       if (
         url.endsWith('/api/v1/providers/deepseek/api-key') &&
         init?.method === undefined
@@ -400,7 +474,7 @@ describe('App', () => {
     expect(within(sidebar).queryByText(/0\.1\.0/)).not.toBeInTheDocument();
     expect(sidebar.lastElementChild).toHaveClass('sidebar-footer');
     expect(screen.queryByText('暂无记录')).not.toBeInTheDocument();
-    expect(globalThis.fetch).toHaveBeenCalledTimes(5);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(6);
 
     fireEvent.click(modelServices);
     expect(
@@ -408,7 +482,7 @@ describe('App', () => {
     ).not.toBeInTheDocument();
 
     fireEvent.click(within(sidebar).getByRole('button', { name: '设置' }));
-    expect(screen.getByText('版本 v0.1.0')).toBeVisible();
+    expect(screen.getByText('版本 v0.1.0-beta')).toBeVisible();
   });
 
   it('sidecar 离线时仍在关于区展示客户端版本', async () => {
@@ -420,7 +494,7 @@ describe('App', () => {
     expect(within(sidebar).getByRole('status')).toHaveTextContent('服务离线');
 
     fireEvent.click(within(sidebar).getByRole('button', { name: '设置' }));
-    expect(screen.getByText('版本 v0.1.0')).toBeVisible();
+    expect(screen.getByText('版本 v0.1.0-beta')).toBeVisible();
   });
 
   it('从侧栏底部切换应用语言，并保留翻译工作区草稿', async () => {
@@ -520,7 +594,7 @@ describe('App', () => {
     ['pdf_no_text_layer', 'PDF 没有可翻译的文本层'],
     ['pdf_encrypted', 'PDF 已加密，无法读取'],
     ['pdf_corrupt', 'PDF 文件已损坏或格式无效'],
-    ['pdf_layout_model_missing', '本机缺少 PDF 布局模型'],
+    ['pdf_layout_model_missing', '本机缺少 PDF 布局检测模型'],
     ['pdf_font_directory_missing', '本机缺少 PDF 字体资源'],
     ['pdf_font_resource_missing', '本机缺少 PDF 字体资源'],
     ['pdf_font_prepare_failed', 'PDF 字体资源无法加载'],
@@ -642,7 +716,7 @@ describe('App', () => {
     ).toHaveTextContent('英语');
   });
 
-  it('支持 PDF 并保持无额外选项的创建 contract', async () => {
+  it('PDF 双语选项默认关闭，并以左右拼页 contract 进入 upload payload', async () => {
     render(<App />);
     await waitForInitialState();
     const input = document.querySelector('input[type="file"]');
@@ -662,7 +736,15 @@ describe('App', () => {
 
     expect(screen.getByText('sample.pdf')).toBeInTheDocument();
     expect(screen.getByText('准备就绪')).toBeInTheDocument();
-    expect(screen.queryByText('文件选项')).not.toBeInTheDocument();
+    expect(screen.getByText('文件选项')).toBeInTheDocument();
+    expect(
+      screen.getByText('每页原文在左、译文在右，另生成一份双语 PDF'),
+    ).toBeInTheDocument();
+    const bilingualSwitch = screen.getByRole('switch', {
+      name: '生成双语 PDF',
+    });
+    expect(bilingualSwitch).not.toBeChecked();
+    fireEvent.click(bilingualSwitch);
     fireEvent.click(screen.getByRole('button', { name: '开始翻译' }));
 
     expect(
@@ -673,7 +755,137 @@ describe('App', () => {
       .mock.calls.find(([url]) => String(url).endsWith('/api/v1/jobs/upload'));
     const formData = uploadCall?.[1]?.body as FormData;
     expect(formData.get('file')).toBe(pdfFile);
-    expect(formData.has('options')).toBe(false);
+    expect(JSON.parse(String(formData.get('options')))).toEqual({
+      kind: 'pdf',
+      bilingual: true,
+    });
+  });
+
+  it('缺少资源时只自动提示一次，并在 PDF 意图出现时重新拦截', async () => {
+    pdfResources = pdfResourceStatus('missing');
+    render(<App />);
+    await waitForInitialState();
+
+    expect(
+      await screen.findByRole('dialog', { name: '准备 PDF 翻译' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('PDF 布局检测模型')).toBeInTheDocument();
+    expect(screen.getByText('简体中文基础字体')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '稍后再说' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    const input = document.querySelector('input[type="file"]');
+    const pdfFile = new File(['content'], 'needs-resources.pdf', {
+      type: 'application/pdf',
+    });
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [pdfFile] },
+    });
+
+    expect(
+      await screen.findByRole('dialog', { name: '准备 PDF 翻译' }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '稍后再说' }));
+    fireEvent.click(screen.getByRole('button', { name: '开始翻译' }));
+
+    expect(
+      await screen.findByRole('dialog', { name: '准备 PDF 翻译' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('needs-resources.pdf')).toBeInTheDocument();
+    expect(
+      vi
+        .mocked(globalThis.fetch)
+        .mock.calls.find(([url]) =>
+          String(url).endsWith('/api/v1/jobs/upload'),
+        ),
+    ).toBeUndefined();
+  });
+
+  it('下载 PDF 资源后非重叠轮询到 ready，并短暂确认后关闭', async () => {
+    pdfResources = pdfResourceStatus('missing');
+    render(<App />);
+    await waitForInitialState();
+    await screen.findByRole('dialog', { name: '准备 PDF 翻译' });
+
+    pdfResourcePollQueue = [
+      pdfResourceStatus('downloading', 64 * 1024 * 1024),
+      pdfResourceStatus('ready'),
+    ];
+    fireEvent.click(screen.getByRole('button', { name: '下载并启用 PDF' }));
+
+    expect(
+      await screen.findByRole('button', { name: '取消下载' }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText('资源已就绪', {}, { timeout: 2500 }),
+    ).toBeInTheDocument();
+    await waitFor(
+      () => expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
+      { timeout: 1800 },
+    );
+
+    const installCalls = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith('/api/v1/pdf-resources/install') &&
+          init?.method === 'POST',
+      );
+    expect(installCalls).toHaveLength(1);
+  });
+
+  it('取消下载后轮询 cancelling 到 cancelled，并原位提供重试', async () => {
+    pdfResources = pdfResourceStatus('missing');
+    render(<App />);
+    await waitForInitialState();
+    await screen.findByRole('dialog', { name: '准备 PDF 翻译' });
+
+    fireEvent.click(screen.getByRole('button', { name: '下载并启用 PDF' }));
+    const cancelButton = await screen.findByRole('button', {
+      name: '取消下载',
+    });
+    pdfResourcePollQueue = [pdfResourceStatus('cancelled')];
+    fireEvent.click(cancelButton);
+
+    expect(
+      await screen.findByRole('button', { name: '正在取消' }),
+    ).toBeDisabled();
+    expect(
+      await screen.findByRole('button', { name: '重新下载' }),
+    ).toBeInTheDocument();
+
+    const cancelCalls = vi
+      .mocked(globalThis.fetch)
+      .mock.calls.filter(
+        ([url, init]) =>
+          String(url).endsWith('/api/v1/pdf-resources/cancel') &&
+          init?.method === 'POST',
+      );
+    expect(cancelCalls).toHaveLength(1);
+  });
+
+  it('初始资源状态失败后，PDF 意图会重新检查并提供原位重试', async () => {
+    pdfResources = pdfResourceStatus('missing');
+    pdfResourceGetFailuresRemaining = 2;
+    render(<App />);
+    await waitForInitialState();
+
+    const input = document.querySelector('input[type="file"]');
+    fireEvent.change(input as HTMLInputElement, {
+      target: { files: [new File(['content'], 'retry-status.pdf')] },
+    });
+
+    expect(
+      await screen.findByText('暂时无法更新资源，请稍后重试。'),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新检查' }));
+
+    expect(
+      await screen.findByRole('button', { name: '下载并启用 PDF' }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('PDF 布局检测模型')).toBeInTheDocument();
   });
 
   it('DOCX 高级选项进入 upload payload，并只在本次任务区显示结果', async () => {

@@ -64,7 +64,8 @@ interface TranslationWorkspaceProps {
   providers: ProviderStatus[];
   jobs: TranslationJob[];
   onOpenModelSettings: () => void;
-  onStart: (input: StartTranslationInput) => Promise<void>;
+  onPdfIntent: () => void;
+  onStart: (input: StartTranslationInput) => Promise<boolean>;
 }
 
 interface ModelChoice {
@@ -131,6 +132,9 @@ function defaultDocumentOptions(
   }
   if (kind === 'pptx') {
     return { kind, translate_tables: true, translate_notes: true };
+  }
+  if (kind === 'pdf') {
+    return { kind, bilingual: false };
   }
   return null;
 }
@@ -228,7 +232,7 @@ interface AdvancedOptionsProps {
   onChange: (options: DocumentTranslationOptions) => void;
 }
 
-/** 直接铺开当前 Office runtime 的文件选项，让用户无需猜测隐藏入口。 */
+/** 直接铺开当前文档 runtime 的文件选项，让用户无需猜测隐藏入口。 */
 function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
   const { t } = useI18n();
   if (options === null) return null;
@@ -245,22 +249,24 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
         <small>{options.kind.toUpperCase()}</small>
       </header>
       <div className="file-options-controls">
-        <label className="advanced-option-row">
-          <span className="advanced-option-copy">
-            <strong>{t('translation.tables.title')}</strong>
-            <small>{t('translation.tables.description')}</small>
-          </span>
-          <Switch.Root
-            className="option-switch"
-            checked={options.translate_tables}
-            aria-label={t('translation.tables.title')}
-            onCheckedChange={(checked) =>
-              onChange({ ...options, translate_tables: checked })
-            }
-          >
-            <Switch.Thumb />
-          </Switch.Root>
-        </label>
+        {options.kind === 'docx' || options.kind === 'pptx' ? (
+          <label className="advanced-option-row">
+            <span className="advanced-option-copy">
+              <strong>{t('translation.tables.title')}</strong>
+              <small>{t('translation.tables.description')}</small>
+            </span>
+            <Switch.Root
+              className="option-switch"
+              checked={options.translate_tables}
+              aria-label={t('translation.tables.title')}
+              onCheckedChange={(checked) =>
+                onChange({ ...options, translate_tables: checked })
+              }
+            >
+              <Switch.Thumb />
+            </Switch.Root>
+          </label>
+        ) : null}
 
         {options.kind === 'pptx' ? (
           <label className="advanced-option-row">
@@ -298,6 +304,24 @@ function AdvancedOptions({ options, onChange }: AdvancedOptionsProps) {
             </Switch.Root>
           </label>
         ) : null}
+        {options.kind === 'pdf' ? (
+          <label className="advanced-option-row">
+            <span className="advanced-option-copy">
+              <strong>{t('translation.pdfBilingual.title')}</strong>
+              <small>{t('translation.pdfBilingual.description')}</small>
+            </span>
+            <Switch.Root
+              className="option-switch"
+              checked={options.bilingual}
+              aria-label={t('translation.pdfBilingual.title')}
+              onCheckedChange={(checked) =>
+                onChange({ ...options, bilingual: checked })
+              }
+            >
+              <Switch.Thumb />
+            </Switch.Root>
+          </label>
+        ) : null}
       </div>
     </section>
   );
@@ -310,6 +334,7 @@ export function TranslationWorkspace({
   providers,
   jobs,
   onOpenModelSettings,
+  onPdfIntent,
   onStart,
 }: TranslationWorkspaceProps) {
   const { t } = useI18n();
@@ -360,6 +385,7 @@ export function TranslationWorkspace({
             setDocument({ source: 'path', path, name, kind });
             setDocumentOptions(defaultDocumentOptions(kind));
             setNotice(null);
+            if (kind === 'pdf') onPdfIntent();
           },
         );
         if (disposed) nextUnlisten();
@@ -376,7 +402,7 @@ export function TranslationWorkspace({
       disposed = true;
       unlisten?.();
     };
-  }, [active, t]);
+  }, [active, onPdfIntent, t]);
 
   const choiceGroups = modelChoiceGroups(catalog, providers);
   const choices = choiceGroups.flatMap((group) => group.choices);
@@ -411,6 +437,7 @@ export function TranslationWorkspace({
     setDocument({ source: 'file', file, name: file.name, kind });
     setDocumentOptions(defaultDocumentOptions(kind));
     setNotice(null);
+    if (kind === 'pdf') onPdfIntent();
   }
 
   /** 在 Tauri 中使用原生 dialog，普通浏览器则触发隐藏 file input。 */
@@ -437,6 +464,7 @@ export function TranslationWorkspace({
     setDocument({ source: 'path', path: selected, name, kind });
     setDocumentOptions(defaultDocumentOptions(kind));
     setNotice(null);
+    if (kind === 'pdf') onPdfIntent();
   }
 
   /** 提交当前单文件任务，并只在成功创建后清空 composer。 */
@@ -445,7 +473,7 @@ export function TranslationWorkspace({
     setIsStarting(true);
     setNotice(null);
     try {
-      await onStart({
+      const created = await onStart({
         document,
         sourceLanguage: sourceLanguage === 'auto' ? null : sourceLanguage,
         targetLanguage,
@@ -453,7 +481,7 @@ export function TranslationWorkspace({
         modelId: selectedModel.modelId,
         options: documentOptions,
       });
-      setDocument(null);
+      if (created) setDocument(null);
     } catch (error) {
       setNotice(translationRequestError(error, t));
     } finally {

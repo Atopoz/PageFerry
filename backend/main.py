@@ -28,7 +28,8 @@ from modules.pdf.assets import (
     pdf_asset_pack_path,
     pdf_asset_path,
 )
-from modules.pdf.layout import LayoutDetector
+from modules.pdf.lazy_layout import LazyLayoutDetector
+from modules.pdf.resource_installer import PdfResourceInstaller
 from modules.translation.jobs import TranslationJobService
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,9 @@ def create_app(
     *,
     secret_store: SecretStore | None = None,
     http_client_factory: HttpClientFactory | None = None,
+    pdf_resource_installer: PdfResourceInstaller | None = None,
 ) -> FastAPI:
-    """构造可注入 provider 基础设施的应用, 方便安全测试."""
+    """构造可注入 provider 与 PDF 资源基础设施的应用, 方便安全测试."""
 
     resolved_settings = settings or get_settings()
     paths = resolve_app_paths(resolved_settings.data_dir)
@@ -57,10 +59,23 @@ def create_app(
     pdf_asset_manifest = load_default_pdf_asset_manifest()
     pdf_asset_pack = pdf_asset_pack_path(paths.root, pdf_asset_manifest)
     layout_asset = find_pdf_asset(pdf_asset_manifest, "pp-doclayout-v3-onnx")
-    layout_detector = LayoutDetector(
-        resolved_settings.layout_model_path or pdf_asset_path(pdf_asset_pack, layout_asset),
+    resolved_pdf_resource_installer = pdf_resource_installer or PdfResourceInstaller(
+        pdf_asset_manifest,
+        pdf_asset_pack,
+    )
+    configured_layout_model_path = resolved_settings.layout_model_path
+    layout_detector = LazyLayoutDetector(
+        configured_layout_model_path or pdf_asset_path(pdf_asset_pack, layout_asset),
         max_concurrency=resolved_settings.layout_max_concurrency,
         intra_op_threads=resolved_settings.layout_intra_op_threads,
+        # canonical pack 由 installer 在首个 PDF 任务前统一校验模型和字体。
+        # 显式 override 不属于 manifest pack, 仍交给 LayoutDetector 自行校验。
+        resource_validator=(
+            resolved_pdf_resource_installer.ensure_ready
+            if configured_layout_model_path is None
+            else None
+        ),
+        verify_model_checksum=configured_layout_model_path is not None,
     )
     translation_job_service = TranslationJobService(
         job_repository,
@@ -87,7 +102,11 @@ def create_app(
             logger.warning("Provider credential reconciliation is pending; retrying next startup.")
         # BackgroundTasks 没有 durable worker; 重启后的 queued/running 都不可能自动继续。
         job_repository.mark_interrupted_jobs()
-        yield
+        resolved_pdf_resource_installer.initialize()
+        try:
+            yield
+        finally:
+            resolved_pdf_resource_installer.close()
 
     application = FastAPI(
         title=resolved_settings.app_name,
@@ -130,6 +149,7 @@ def create_app(
     application.state.layout_detector = layout_detector
     application.state.pdf_asset_manifest = pdf_asset_manifest
     application.state.pdf_asset_pack = pdf_asset_pack
+    application.state.pdf_resource_installer = resolved_pdf_resource_installer
     application.add_middleware(
         CORSMiddleware,
         allow_origins=list(resolved_settings.allowed_origins),
@@ -140,6 +160,3 @@ def create_app(
     application.add_api_route("/healthz", health, response_model=HealthResponse, tags=["system"])
     application.include_router(api_router)
     return application
-
-
-app = create_app()

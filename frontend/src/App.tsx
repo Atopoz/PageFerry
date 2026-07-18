@@ -1,7 +1,7 @@
 /** 组装 PageFerry 桌面壳、工作页面、通用设置与本地任务轮询。 */
 
 import { AlertTriangle } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { HistoryPage } from './features/history/HistoryPage';
 import {
@@ -11,6 +11,10 @@ import {
 } from './features/navigation/AppSidebar';
 import { AppTitlebar } from './features/navigation/AppTitlebar';
 import { detectDesktopPlatform } from './features/navigation/desktop-platform';
+import {
+  PdfResourceInstaller,
+  type PdfResourceInstallerHandle,
+} from './features/pdf-resources/PdfResourceDialog';
 import { ProviderPage } from './features/providers/ProviderPage';
 import { SettingsPage } from './features/settings/SettingsPage';
 import {
@@ -27,6 +31,7 @@ import {
   getHealth,
   getJobs,
   getModelCatalog,
+  getPdfResourceStatus,
   getProviderApiKey,
   getProviderStatuses,
   probeProvider,
@@ -38,6 +43,7 @@ import {
   type CreateProviderModelInput,
   type CreateCustomProviderInput,
   type ModelCatalog,
+  type PdfResourceStatus,
   type ProviderModelStatus,
   type ProviderModelSync,
   type ProviderProbeResult,
@@ -129,21 +135,31 @@ function AppContent() {
   const [sessionJobIds, setSessionJobIds] = useState<string[]>([]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [loadError, setLoadError] = useState<MessageKey | null>(null);
+  const [initialPdfResources, setInitialPdfResources] =
+    useState<PdfResourceStatus | null>(null);
+  const pdfResourceInstallerRef = useRef<PdfResourceInstallerHandle>(null);
 
   useEffect(() => {
     const controller = new AbortController();
 
-    /** 并行读取四个独立 endpoint，避免模型和任务请求形成启动瀑布。 */
+    /** 并行读取五个独立 endpoint，避免模型、任务与 PDF 资源形成启动瀑布。 */
     async function loadInitialState() {
       const results = await Promise.allSettled([
         getHealth(controller.signal),
         getModelCatalog(controller.signal),
         getProviderStatuses(controller.signal),
         getJobs(controller.signal),
+        getPdfResourceStatus(controller.signal),
       ]);
       if (controller.signal.aborted) return;
 
-      const [healthResult, catalogResult, providerResult, jobsResult] = results;
+      const [
+        healthResult,
+        catalogResult,
+        providerResult,
+        jobsResult,
+        pdfResourceResult,
+      ] = results;
       if (healthResult.status === 'fulfilled') {
         setServiceState('connected');
       } else {
@@ -154,6 +170,9 @@ function AppContent() {
         setProviders(providerResult.value);
       }
       if (jobsResult.status === 'fulfilled') setJobs(jobsResult.value);
+      if (pdfResourceResult.status === 'fulfilled') {
+        setInitialPdfResources(pdfResourceResult.value);
+      }
 
       const firstFailure = results.find(
         (result) => result.status === 'rejected',
@@ -200,8 +219,21 @@ function AppContent() {
     };
   }, [hasActiveJobs]);
 
+  /** PDF 意图出现时同步判断资源；未 ready 则唤起安装入口。 */
+  const requirePdfResources = useCallback(() => {
+    pdfResourceInstallerRef.current?.requireReady();
+  }, []);
+
   /** 根据来源是 Tauri path 还是浏览器 File，调用对应创建 endpoint。 */
-  async function startTranslation(input: StartTranslationInput) {
+  async function startTranslation(
+    input: StartTranslationInput,
+  ): Promise<boolean> {
+    if (
+      input.document.kind === 'pdf' &&
+      pdfResourceInstallerRef.current?.requireReady() !== true
+    ) {
+      return false;
+    }
     const common = {
       source_language: input.sourceLanguage,
       target_language: input.targetLanguage,
@@ -224,6 +256,7 @@ function AppContent() {
       current.includes(job.id) ? current : [job.id, ...current],
     );
     setLoadError(null);
+    return true;
   }
 
   /** 保存任意 provider 的启用模型集合，并合并后端权威状态。 */
@@ -386,6 +419,7 @@ function AppContent() {
               providers={providers}
               jobs={sessionJobs}
               onOpenModelSettings={() => setActiveRoute('providers')}
+              onPdfIntent={requirePdfResources}
               onStart={startTranslation}
             />
           </div>
@@ -413,6 +447,11 @@ function AppContent() {
           </div>
         </main>
       </div>
+
+      <PdfResourceInstaller
+        ref={pdfResourceInstallerRef}
+        initialStatus={initialPdfResources}
+      />
     </div>
   );
 }

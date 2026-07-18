@@ -1,0 +1,142 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: Git tag to build (for example v0.1.0-beta)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ inputs.release_ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows-x64:
+    name: Windows x64 NSIS
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.release_ref }}
+
+      - name: Verify release version
+        shell: pwsh
+        env:
+          PAGEFERRY_RELEASE_REF: ${{ inputs.release_ref }}
+        run: |
+          if ($env:PAGEFERRY_RELEASE_REF -notmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+            throw "release_ref must be a version tag beginning with v"
+          }
+          $version = (Get-Content tauri/tauri.conf.json | ConvertFrom-Json).version
+          $expected = $env:PAGEFERRY_RELEASE_REF -replace '^v', ''
+          if ($version -ne $expected) {
+            throw "Release ref expects $expected, but tauri.conf.json contains $version"
+          }
+
+      - name: Set up Python runtime
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Set up Node.js runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: frontend/.node-version
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Set up Rust runtime
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.97.0"
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tauri -> target
+
+      - name: Install locked dependencies
+        shell: pwsh
+        run: |
+          uv sync --directory backend --frozen
+          npm ci --prefix frontend
+
+      - name: Test Windows backend
+        run: uv run --directory backend pytest
+
+      - name: Build Windows sidecar
+        run: uv run --directory backend python ../scripts/build-sidecar.py
+
+      - name: Smoke test frozen sidecar
+        shell: pwsh
+        run: |
+          $token = "windows-release-smoke-token-0123456789abcdef"
+          $dataDirectory = Join-Path $env:RUNNER_TEMP "pageferry-sidecar-smoke"
+          $stdout = Join-Path $env:RUNNER_TEMP "pageferry-sidecar.stdout"
+          $stderr = Join-Path $env:RUNNER_TEMP "pageferry-sidecar.stderr"
+          $executable = Resolve-Path "tauri/binaries/pageferry-backend/pageferry-backend.exe"
+          $process = Start-Process `
+            -FilePath $executable `
+            -ArgumentList "--port", "0", "--boot-token", $token, "--data-dir", $dataDirectory `
+            -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr `
+            -PassThru
+
+          try {
+            $ready = $null
+            for ($attempt = 0; $attempt -lt 120; $attempt++) {
+              if ($process.HasExited) {
+                throw "Frozen sidecar exited before ready: $(Get-Content $stderr -Raw)"
+              }
+              if ((Test-Path $stdout) -and (Get-Item $stdout).Length -gt 0) {
+                $line = Get-Content $stdout | Select-Object -First 1
+                $ready = $line | ConvertFrom-Json
+                break
+              }
+              Start-Sleep -Milliseconds 250
+            }
+            if ($null -eq $ready -or $ready.event -ne "ready" -or $ready.port -le 0) {
+              throw "Frozen sidecar did not emit a valid ready handshake"
+            }
+
+            $health = Invoke-RestMethod "http://127.0.0.1:$($ready.port)/healthz"
+            if ($health.code -ne "success" -or $health.data.service -ne "pageferry-api") {
+              throw "Frozen sidecar returned an invalid health response"
+            }
+          }
+          finally {
+            if (-not $process.HasExited) {
+              Stop-Process -Id $process.Id -Force
+            }
+          }
+
+      - name: Build NSIS installer
+        working-directory: tauri
+        run: npm --prefix ../frontend exec -- tauri build --bundles nsis --config tauri.release.conf.json
+
+      - name: Inspect installer
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem "tauri/target/release/bundle/nsis/*.exe")
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)"
+          }
+          Get-FileHash $installers[0].FullName -Algorithm SHA256
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: PageFerry-${{ inputs.release_ref }}-windows-x64
+          path: tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 7

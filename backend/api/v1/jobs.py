@@ -39,8 +39,17 @@ class PptxOptionsRequest(BaseModel):
     translate_notes: bool = True
 
 
+class PdfOptionsRequest(BaseModel):
+    """接收 PDF runtime 当前真实支持的拼接式双语选项。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["pdf"]
+    bilingual: bool = False
+
+
 DocumentOptionsRequest = Annotated[
-    DocxOptionsRequest | PptxOptionsRequest,
+    DocxOptionsRequest | PptxOptionsRequest | PdfOptionsRequest,
     Field(discriminator="kind"),
 ]
 
@@ -74,8 +83,15 @@ class PptxOptionsResponse(BaseModel):
     translate_notes: bool
 
 
+class PdfOptionsResponse(BaseModel):
+    """返回创建任务时冻结的 PDF 拼接式双语选项。"""
+
+    kind: Literal["pdf"]
+    bilingual: bool
+
+
 DocumentOptionsResponse = Annotated[
-    DocxOptionsResponse | PptxOptionsResponse,
+    DocxOptionsResponse | PptxOptionsResponse | PdfOptionsResponse,
     Field(discriminator="kind"),
 ]
 
@@ -206,18 +222,23 @@ def _job_response(job: JobRecord) -> JobResponse:
     """显式投影 repository record, 确保未来字段不会意外暴露给 renderer。"""
 
     options = None
-    if job.options is not None and job.options.kind in {"docx", "pptx"}:
+    if job.options is not None and job.options.kind in {"docx", "pptx", "pdf"}:
         if job.options.kind == "docx":
             options = DocxOptionsResponse(
                 kind="docx",
                 translate_tables=job.options.translate_tables is not False,
                 bilingual=job.options.bilingual is True,
             )
-        else:
+        elif job.options.kind == "pptx":
             options = PptxOptionsResponse(
                 kind="pptx",
                 translate_tables=job.options.translate_tables is not False,
                 translate_notes=job.options.translate_notes is not False,
+            )
+        else:
+            options = PdfOptionsResponse(
+                kind="pdf",
+                bilingual=job.options.bilingual is True,
             )
     return JobResponse(
         id=job.id,
@@ -248,7 +269,7 @@ def _job_response(job: JobRecord) -> JobResponse:
 
 
 def _document_options(
-    options: DocxOptionsRequest | PptxOptionsRequest | None,
+    options: DocxOptionsRequest | PptxOptionsRequest | PdfOptionsRequest | None,
 ) -> DocumentTranslationOptions | None:
     """把 HTTP schema 转为 modules 层不依赖 Pydantic 的不可变 contract。"""
 
@@ -256,11 +277,19 @@ def _document_options(
         return None
     return DocumentTranslationOptions(
         kind=options.kind,
-        translate_tables=options.translate_tables,
+        translate_tables=(
+            options.translate_tables
+            if isinstance(options, (DocxOptionsRequest, PptxOptionsRequest))
+            else None
+        ),
         translate_notes=(
             options.translate_notes if isinstance(options, PptxOptionsRequest) else None
         ),
-        bilingual=(options.bilingual if isinstance(options, DocxOptionsRequest) else None),
+        bilingual=(
+            options.bilingual
+            if isinstance(options, (DocxOptionsRequest, PdfOptionsRequest))
+            else None
+        ),
     )
 
 

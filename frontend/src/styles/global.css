@@ -141,3 +141,82 @@ input:focus-visible {
   color: var(--ink);
   background: #cce8ef;
 }
+
+.startup-state {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  overflow: hidden;
+  color: var(--ink);
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 42%, rgb(18 107 131 / 13%), transparent 34%),
+    linear-gradient(180deg, #fbfcfc 0%, #edf4f5 100%);
+}
+
+.startup-panel {
+  width: min(360px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+
+.startup-logo {
+  width: 76px;
+  height: 76px;
+  margin-bottom: 10px;
+  border-radius: 18px;
+  box-shadow: 0 12px 32px rgb(22 59 92 / 14%);
+}
+
+.startup-state strong {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.startup-state span {
+  color: var(--muted-text);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.startup-progress {
+  width: 180px;
+  height: 3px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(18 107 131 / 13%);
+}
+
+.startup-progress i {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--brand-dark), #65b7ae);
+  animation: startup-progress 1.25s ease-in-out infinite;
+}
+
+.startup-state--failure {
+  background: linear-gradient(180deg, #fbfcfc 0%, #f5f1f0 100%);
+}
+
+@keyframes startup-progress {
+  from {
+    transform: translateX(-110%);
+  }
+
+  to {
+    transform: translateX(345%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .startup-progress i {
+    width: 100%;
+    animation: none;
+  }
+}

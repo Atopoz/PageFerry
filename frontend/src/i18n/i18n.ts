@@ -42,6 +42,24 @@ export function readLocalePreference(): LocalePreference {
   return 'system';
 }
 
+/** 将用户偏好与系统 locale 合并为当前真正生效的界面语言。 */
+export function resolveUiLocale(
+  preference: LocalePreference,
+  systemLocale: UiLocale,
+): UiLocale {
+  return preference === 'system' ? systemLocale : preference;
+}
+
+/** 按持久化偏好与系统语言解析应用首次渲染应使用的 locale。 */
+export function resolveInitialUiLocale(
+  languages: readonly string[] = navigator.languages,
+): UiLocale {
+  return resolveUiLocale(
+    readLocalePreference(),
+    resolveSystemLocale(languages),
+  );
+}
+
 /** 用命名占位符替换动态值，避免组件自己拼接双语句子。 */
 function interpolate(template: string, values: MessageValues = {}): string {
   return template.replace(/\{(\w+)\}/g, (match, key: string) =>

@@ -1,7 +1,46 @@
 /** 封装 React renderer 与本地 FastAPI sidecar 之间的窄 HTTP contract。 */
 
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8765';
+import { invoke, isTauri } from '@tauri-apps/api/core';
+
+let apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8765';
+let apiBootToken: string | null = null;
+
+interface SidecarConnection {
+  baseUrl: string;
+  bootToken: string | null;
+}
+
+/** 在 renderer 发出首个 HTTP 请求前读取 Tauri 托管的实际 sidecar 连接。 */
+export async function initializeApiRuntime(): Promise<void> {
+  if (!isTauri()) return;
+  try {
+    const connection = await invoke<SidecarConnection>('sidecar_connection');
+    const endpoint = new URL(connection.baseUrl);
+    const port = Number(endpoint.port);
+    if (
+      endpoint.protocol !== 'http:' ||
+      endpoint.hostname !== '127.0.0.1' ||
+      endpoint.pathname !== '/' ||
+      endpoint.search !== '' ||
+      endpoint.hash !== '' ||
+      !Number.isInteger(port) ||
+      port <= 0 ||
+      port > 65535
+    ) {
+      throw new Error('Invalid sidecar endpoint');
+    }
+    if (connection.bootToken !== null && connection.bootToken.length < 32) {
+      throw new Error('Invalid sidecar token');
+    }
+    apiBaseUrl = connection.baseUrl.replace(/\/$/, '');
+    apiBootToken = connection.bootToken;
+  } catch (error) {
+    // release runtime 不能静默退回固定端口，否则可能连接到另一个本机进程。
+    apiBaseUrl = 'http://127.0.0.1:0';
+    apiBootToken = null;
+    throw error;
+  }
+}
 
 interface HealthResponse {
   code: 'success';
@@ -182,6 +221,26 @@ export interface TranslationArtifact {
   path: string;
 }
 
+export type PdfResourceState =
+  'ready' | 'missing' | 'downloading' | 'cancelling' | 'failed' | 'cancelled';
+
+export interface PdfResourceItem {
+  pack: string;
+  size_bytes: number;
+  completed_bytes: number;
+  ready: boolean;
+}
+
+export interface PdfResourceStatus {
+  pack_revision: string;
+  state: PdfResourceState;
+  total_bytes: number;
+  completed_bytes: number;
+  current_asset_id: string | null;
+  error_code: string | null;
+  resources: PdfResourceItem[];
+}
+
 export type DocumentTranslationOptions =
   | {
       kind: 'docx';
@@ -192,6 +251,10 @@ export type DocumentTranslationOptions =
       kind: 'pptx';
       translate_tables: boolean;
       translate_notes: boolean;
+    }
+  | {
+      kind: 'pdf';
+      bilingual: boolean;
     };
 
 interface RequestOptions {
@@ -254,7 +317,13 @@ async function requestJson<T>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, options);
+  let requestOptions = options;
+  if (apiBootToken !== null) {
+    const headers = new Headers(options.headers);
+    headers.set('X-PageFerry-Boot-Token', apiBootToken);
+    requestOptions = { ...options, headers };
+  }
+  const response = await fetch(`${apiBaseUrl}${path}`, requestOptions);
   if (!response.ok) {
     const payload: unknown = await response.json().catch(() => null);
     const error = readError(payload);
@@ -535,6 +604,33 @@ export async function getJobs(signal?: AbortSignal): Promise<TranslationJob[]> {
   const payload = await requestJson<unknown>('/api/v1/jobs', { signal });
   const jobs = unwrapData<TranslationJob[]>(payload);
   return Array.isArray(jobs) ? jobs : [];
+}
+
+/** 读取 PDF resource pack 的本地安装与下载进度。 */
+export async function getPdfResourceStatus(
+  signal?: AbortSignal,
+): Promise<PdfResourceStatus> {
+  const payload = await requestJson<unknown>('/api/v1/pdf-resources', {
+    cache: 'no-store',
+    signal,
+  });
+  return unwrapData<PdfResourceStatus>(payload);
+}
+
+/** 显式开始或重试 PDF resource pack 安装。 */
+export async function installPdfResources(): Promise<PdfResourceStatus> {
+  const payload = await requestJson<unknown>('/api/v1/pdf-resources/install', {
+    method: 'POST',
+  });
+  return unwrapData<PdfResourceStatus>(payload);
+}
+
+/** 请求取消当前 PDF resource pack 下载，并返回后端收敛后的状态。 */
+export async function cancelPdfResourceInstall(): Promise<PdfResourceStatus> {
+  const payload = await requestJson<unknown>('/api/v1/pdf-resources/cancel', {
+    method: 'POST',
+  });
+  return unwrapData<PdfResourceStatus>(payload);
 }
 
 /** 使用 Tauri 文件对话框返回的本地路径创建任务。 */

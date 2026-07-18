@@ -5,11 +5,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   configureProvider,
+  cancelPdfResourceInstall,
   createCustomProvider,
   createProviderModel,
   deleteProvider,
+  getPdfResourceStatus,
   getProviderApiKey,
   probeProvider,
+  installPdfResources,
   setProviderActive,
   setProviderModelEnabled,
   syncProviderModels,
@@ -31,6 +34,73 @@ describe('API client', () => {
 
     await expect(deleteProvider('deepseek')).resolves.toBeUndefined();
     expect(parseJson).not.toHaveBeenCalled();
+  });
+
+  it('读取 PDF resource pack 时解包 data 并禁用 HTTP cache', async () => {
+    const status = {
+      pack_revision: '2026.07.18.1',
+      state: 'missing',
+      total_bytes: 150,
+      completed_bytes: 0,
+      current_asset_id: null,
+      error_code: null,
+      resources: [],
+    } as const;
+    const requestSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: status }),
+    } as Response);
+    const controller = new AbortController();
+
+    await expect(getPdfResourceStatus(controller.signal)).resolves.toEqual(
+      status,
+    );
+    expect(requestSpy).toHaveBeenCalledWith(
+      'http://127.0.0.1:8765/api/v1/pdf-resources',
+      expect.objectContaining({
+        cache: 'no-store',
+        signal: controller.signal,
+      }),
+    );
+  });
+
+  it('PDF resource pack 安装与取消使用独立 POST endpoint', async () => {
+    const downloading = {
+      pack_revision: '2026.07.18.1',
+      state: 'downloading',
+      total_bytes: 150,
+      completed_bytes: 25,
+      current_asset_id: 'layout-model',
+      error_code: null,
+      resources: [],
+    } as const;
+    const cancelling = { ...downloading, state: 'cancelling' as const };
+    const requestSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: downloading }),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ data: cancelling }),
+      } as Response);
+
+    await expect(installPdfResources()).resolves.toEqual(downloading);
+    await expect(cancelPdfResourceInstall()).resolves.toEqual(cancelling);
+    expect(requestSpy).toHaveBeenNthCalledWith(
+      1,
+      'http://127.0.0.1:8765/api/v1/pdf-resources/install',
+      { method: 'POST' },
+    );
+    expect(requestSpy).toHaveBeenNthCalledWith(
+      2,
+      'http://127.0.0.1:8765/api/v1/pdf-resources/cancel',
+      { method: 'POST' },
+    );
   });
 
   it('保留 provider 顶层错误码供设置面板翻译', async () => {

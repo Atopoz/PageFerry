@@ -147,7 +147,7 @@ def test_startup_creates_local_data_layout_and_database(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "code": "success",
-        "data": {"service": "pageferry-api", "version": "0.1.0"},
+        "data": {"service": "pageferry-api", "version": "0.1.0-beta"},
     }
     for directory in ("workspace", "outputs", "models", "pdf", "cache", "logs"):
         assert (tmp_path / directory).is_dir()

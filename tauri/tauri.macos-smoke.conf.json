@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "binaries/pageferry-backend/": "backend/",
+      "../LICENSE": "LICENSE"
+    },
+    "macOS": {
+      "signingIdentity": "-"
+    }
+  }
+}

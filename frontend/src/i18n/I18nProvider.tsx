@@ -15,6 +15,7 @@ import {
   localeStorageKey,
   readLocalePreference,
   resolveSystemLocale,
+  resolveUiLocale,
   translator,
 } from '@/i18n/i18n';
 
@@ -27,7 +28,7 @@ export function I18nProvider({ children }: I18nProviderProps) {
   const [preference, setPreferenceState] =
     useState<LocalePreference>(readLocalePreference);
   const [systemLocale, setSystemLocale] = useState(resolveSystemLocale);
-  const locale = preference === 'system' ? systemLocale : preference;
+  const locale = resolveUiLocale(preference, systemLocale);
 
   useEffect(() => {
     /** 仅在系统偏好改变时重新解析，手动选择的 locale 不受影响。 */

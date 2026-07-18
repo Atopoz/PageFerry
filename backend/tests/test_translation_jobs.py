@@ -12,6 +12,7 @@ from modules.translation.contracts import (
     BatchTranslator,
     DocumentKind,
     DocumentPipelineError,
+    DocumentTranslationOptions,
     TranslationBatchItem,
     TranslationBatchResult,
     TranslationProgress,
@@ -136,8 +137,10 @@ class RecordingJobRepository(JobRepository):
         return super().update_progress(job_id, snapshot)
 
 
-def test_default_pdf_factory_passes_app_data_font_directory(tmp_path: Path) -> None:
-    """默认 PDF factory 必须把 app-data 字体目录交给 pipeline。"""
+def test_default_pdf_factory_passes_font_directory_and_bilingual_option(
+    tmp_path: Path,
+) -> None:
+    """默认 PDF factory 必须传入 app-data 字体目录与冻结的双语选项。"""
 
     from modules.pdf.layout import LayoutDetector
     from modules.pdf.pipeline import PdfPipeline
@@ -148,13 +151,14 @@ def test_default_pdf_factory_passes_app_data_font_directory(tmp_path: Path) -> N
     pipeline = _build_pipeline(
         "pdf",
         IdentityTranslator(),
-        None,
+        DocumentTranslationOptions(kind="pdf", bilingual=True),
         pdf_layout_detector=detector,
         pdf_font_directory=font_directory,
     )
 
     assert isinstance(pipeline, PdfPipeline)
     assert pipeline._font_directory == font_directory.resolve()
+    assert pipeline._bilingual is True
 
 
 def _service(
@@ -349,7 +353,7 @@ def test_unsupported_extension_is_rejected_before_job_creation(tmp_path: Path) -
     source.write_bytes(b"heading,value")
     service = _service(tmp_path)
 
-    with pytest.raises(JobServiceError, match="仅支持"):
+    with pytest.raises(JobServiceError) as raised:
         service.create_path_job(
             source_path=str(source),
             source_language=None,
@@ -358,9 +362,12 @@ def test_unsupported_extension_is_rejected_before_job_creation(tmp_path: Path) -
             model_id="deepseek-v4-flash",
         )
 
+    assert raised.value.code == "unsupported_format"
+    assert raised.value.message == "仅支持 DOCX、PPTX、XLSX、TXT、Markdown 与原生文本型 PDF。"
 
-def test_pdf_extension_is_registered_without_format_options(tmp_path: Path) -> None:
-    """PDF 输入应进入 job registry, 且首版不制造图片翻译或预览选项。"""
+
+def test_pdf_extension_freezes_default_bilingual_option(tmp_path: Path) -> None:
+    """PDF 输入应冻结默认关闭的双语选项, 不制造布局模式字段。"""
 
     source = tmp_path / "source.pdf"
     source.write_bytes(b"%PDF-1.4\n%%EOF")
@@ -375,7 +382,7 @@ def test_pdf_extension_is_registered_without_format_options(tmp_path: Path) -> N
     )
 
     assert job.document_type == "pdf"
-    assert job.options is None
+    assert job.options == DocumentTranslationOptions(kind="pdf", bilingual=False)
 
 
 def test_pipeline_error_code_is_persisted_without_becoming_generic_failure(tmp_path: Path) -> None:

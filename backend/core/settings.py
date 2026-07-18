@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     )
 
     app_name: str = "PageFerry"
-    version: str = "0.1.0"
+    version: str = "0.1.0-beta"
     debug: bool = False
     host: str = "127.0.0.1"
     port: int = 8765

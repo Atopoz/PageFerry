@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import math
 import os
 import sys
-import tempfile
 from collections.abc import Sequence
-from dataclasses import dataclass
-from http.client import HTTPException
 from pathlib import Path
 from typing import BinaryIO
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.error import URLError as _URLError
+from urllib.request import urlopen
 
 from platformdirs import user_data_path
 
@@ -25,32 +21,20 @@ DEFAULT_MANIFEST = BACKEND_ROOT / "resources" / "pdf_assets" / "manifest.json"
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from modules.pdf import resource_installer as resource_installer_module  # noqa: E402
 from modules.pdf.assets import (  # noqa: E402
     PdfAsset,
     PdfAssetManifest,
     PdfAssetManifestError,
-    is_pdf_asset_valid,
     load_pdf_asset_manifest,
-    pdf_asset_download_urls,
     pdf_asset_pack_path,
-    pdf_asset_path,
     select_pdf_assets,
 )
 
-CHUNK_SIZE = 1024 * 1024
-
-
-class PdfAssetSyncError(RuntimeError):
-    """表示 PDF 资源下载、校验或原子落盘失败。"""
-
-
-@dataclass(frozen=True, slots=True)
-class PdfAssetSyncResult:
-    """记录一个资源最终路径及本次是否实际下载。"""
-
-    asset_id: str
-    path: Path
-    downloaded: bool
+CHUNK_SIZE = resource_installer_module.PDF_RESOURCE_CHUNK_SIZE
+PdfAssetSyncError = resource_installer_module.PdfAssetSyncError
+PdfAssetSyncResult = resource_installer_module.PdfAssetSyncResult
+URLError = _URLError
 
 
 def resolve_pack_destination(
@@ -74,46 +58,16 @@ def sync_pdf_asset(
     destination: Path,
     timeout: float = 120.0,
 ) -> bool:
-    """同步单个资产, 有效旧文件直接复用, 新文件校验后原子替换。"""
+    """兼容旧 CLI 调用, 实际下载与校验复用 backend 安装器实现。"""
 
-    if not math.isfinite(timeout) or timeout <= 0:
-        raise PdfAssetSyncError("PDF 资源 timeout 必须是大于 0 的有限数字")
-    temporary_path: Path | None = None
-    try:
-        if destination.exists() and destination.is_dir():
-            raise PdfAssetSyncError(f"PDF 资源目标不能是目录: {destination}")
-        if is_pdf_asset_valid(destination, asset):
-            return False
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        request = Request(
-            url,
-            headers={
-                "Accept": "application/octet-stream",
-                "User-Agent": "PageFerry-pdf-assets/1",
-            },
-        )
-        with tempfile.NamedTemporaryFile(
-            mode="w+b",
-            prefix=f".{destination.name}.",
-            suffix=".download",
-            dir=destination.parent,
-            delete=False,
-        ) as target:
-            temporary_path = Path(target.name)
-            with urlopen(request, timeout=timeout) as response:
-                _stream_asset(response, target, asset)
-            target.flush()
-            os.fsync(target.fileno())
-        os.replace(temporary_path, destination)
-        temporary_path = None
-        return True
-    except PdfAssetSyncError:
-        raise
-    except (OSError, URLError, HTTPException) as error:
-        raise PdfAssetSyncError(f"PDF 资源同步失败: {asset.asset_id}") from error
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+    return resource_installer_module.sync_pdf_asset(
+        asset,
+        url=url,
+        destination=destination,
+        timeout=timeout,
+        open_url=urlopen,
+        replace_file=os.replace,
+    )
 
 
 def sync_pdf_asset_pack(
@@ -124,76 +78,23 @@ def sync_pdf_asset_pack(
     base_url: str | None = None,
     timeout: float = 120.0,
 ) -> tuple[PdfAssetSyncResult, ...]:
-    """按 manifest 顺序同步整个 pack, 每个文件独立原子收敛。"""
+    """兼容旧 CLI contract, 按主源、fallback、upstream 顺序同步所选资源。"""
 
-    results: list[PdfAssetSyncResult] = []
-    selected_assets = assets if assets is not None else manifest.assets
-    for asset in selected_assets:
-        destination = pdf_asset_path(pack_path, asset)
-        try:
-            if is_pdf_asset_valid(destination, asset):
-                results.append(
-                    PdfAssetSyncResult(
-                        asset_id=asset.asset_id,
-                        path=destination,
-                        downloaded=False,
-                    )
-                )
-                continue
-        except OSError as error:
-            raise PdfAssetSyncError(f"无法校验现有 PDF 资源: {destination}") from error
-        urls = pdf_asset_download_urls(manifest, asset, base_url=base_url)
-        last_error: PdfAssetSyncError | None = None
-        downloaded = False
-        for url in urls:
-            try:
-                downloaded = sync_pdf_asset(
-                    asset,
-                    url=url,
-                    destination=destination,
-                    timeout=timeout,
-                )
-                break
-            except PdfAssetSyncError as error:
-                # 每个候选使用独立临时文件, 坏源绝不能污染下一次尝试或旧文件。
-                last_error = error
-        else:
-            raise PdfAssetSyncError(
-                f"PDF 资源所有下载来源均失败: {asset.asset_id} "
-                f"(尝试 {len(urls)} 个来源), 最后一次错误: {last_error}"
-            ) from last_error
-        results.append(
-            PdfAssetSyncResult(
-                asset_id=asset.asset_id,
-                path=destination,
-                downloaded=downloaded,
-            )
-        )
-    return tuple(results)
+    return resource_installer_module.sync_pdf_asset_pack(
+        manifest,
+        pack_path,
+        assets=assets,
+        base_url=base_url,
+        timeout=timeout,
+        open_url=urlopen,
+        replace_file=os.replace,
+    )
 
 
 def _stream_asset(response: BinaryIO, target: BinaryIO, asset: PdfAsset) -> None:
-    """边下载边校验 size 与 SHA-256, 超长或不完整内容立即失败。"""
+    """保留旧脚本测试入口, 复用 backend 的流式完整性校验。"""
 
-    digest = hashlib.sha256()
-    size = 0
-    while chunk := response.read(CHUNK_SIZE):
-        target.write(chunk)
-        digest.update(chunk)
-        size += len(chunk)
-        if size > asset.size_bytes:
-            raise PdfAssetSyncError(
-                f"PDF 资源超过 manifest size: expected={asset.size_bytes}, actual>{size}"
-            )
-    if size != asset.size_bytes:
-        raise PdfAssetSyncError(
-            f"PDF 资源 size 校验失败: expected={asset.size_bytes}, actual={size}"
-        )
-    actual_sha256 = digest.hexdigest()
-    if actual_sha256 != asset.sha256:
-        raise PdfAssetSyncError(
-            f"PDF 资源 SHA-256 校验失败: expected={asset.sha256}, actual={actual_sha256}"
-        )
+    resource_installer_module._stream_pdf_asset(response, target, asset)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

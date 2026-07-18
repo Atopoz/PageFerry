@@ -5,10 +5,33 @@ from pathlib import Path
 from db.jobs import JobRepository
 from db.sqlite import initialize_database
 from modules.translation.contracts import (
+    DocumentTranslationOptions,
     TranslationArtifact,
     TranslationProgress,
     TranslationResult,
 )
+
+
+def test_job_repository_roundtrips_pdf_bilingual_option(tmp_path: Path) -> None:
+    """PDF 双语开关必须通过现有 options_json 原样往返。"""
+
+    database = tmp_path / "pageferry.sqlite3"
+    initialize_database(database)
+    repository = JobRepository(database)
+
+    job = repository.create(
+        job_id="job-pdf-bilingual",
+        source_path=tmp_path / "source.pdf",
+        source_name="source.pdf",
+        document_type="pdf",
+        provider_id="deepseek",
+        model_id="deepseek-v4-flash",
+        source_language="en",
+        target_language="zh-CN",
+        options=DocumentTranslationOptions(kind="pdf", bilingual=True),
+    )
+
+    assert job.options == DocumentTranslationOptions(kind="pdf", bilingual=True)
 
 
 def test_job_repository_persists_result_warnings_and_fallback_count(tmp_path) -> None:

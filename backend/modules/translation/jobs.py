@@ -7,7 +7,7 @@ import tempfile
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Protocol, cast
 from uuid import uuid4
 
 from db.jobs import JobRecord, JobRepository
@@ -287,14 +287,16 @@ def _build_pipeline(
         if pdf_font_directory is None:
             raise PdfPipelineError(PDF_FONT_DIRECTORY_MISSING)
         detector = (
-            pdf_layout_detector
-            if isinstance(pdf_layout_detector, LayoutDetector)
+            cast(LayoutDetector, pdf_layout_detector)
+            if pdf_layout_detector is not None
             else LayoutDetector()
         )
+        bilingual = options.bilingual if options is not None else False
         return PdfPipeline(
             translator,
             detector,
             font_directory=pdf_font_directory,
+            bilingual=bilingual is True,
         )
     raise JobServiceError("unsupported_format", "尚不支持该文件格式。", status_code=400)
 
@@ -337,6 +339,15 @@ def _normalize_document_options(
                 options.translate_notes
                 if options is not None and options.translate_notes is not None
                 else True
+            ),
+        )
+    if document_kind == "pdf":
+        return DocumentTranslationOptions(
+            kind="pdf",
+            bilingual=(
+                options.bilingual
+                if options is not None and options.bilingual is not None
+                else False
             ),
         )
     if document_kind == "xlsx":
@@ -392,7 +403,7 @@ def _document_kind_for_name(file_name: str) -> DocumentKind:
     if document_kind is None:
         raise JobServiceError(
             "unsupported_format",
-            "仅支持 DOCX、PPTX、XLSX、TXT 与 Markdown。",
+            "仅支持 DOCX、PPTX、XLSX、TXT、Markdown 与原生文本型 PDF。",
             status_code=400,
         )
     return document_kind

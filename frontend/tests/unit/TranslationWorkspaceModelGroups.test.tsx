@@ -72,7 +72,8 @@ function renderWorkspace(providers: ProviderStatus[]) {
       providers={providers}
       jobs={[]}
       onOpenModelSettings={vi.fn()}
-      onStart={vi.fn(async () => undefined)}
+      onPdfIntent={vi.fn()}
+      onStart={vi.fn(async () => true)}
     />,
   );
 }
